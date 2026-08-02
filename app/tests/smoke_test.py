@@ -58,7 +58,7 @@ def t_preflight():
     from screenmanget.caster import preflight
 
     problems = preflight()
-    return (not problems), ("; ".join(problems) if problems else "distrobox + binary + avahi present")
+    return (not problems), ("; ".join(problems) if problems else "distrobox + doubletake binary present")
 
 
 def t_monitors():
@@ -66,22 +66,23 @@ def t_monitors():
 
     mons = list_monitors()
     if not mons:
-        return None, "xrandr returned no monitors (headless?)"
+        return None, "no monitors enumerated (headless?)"
     return True, ", ".join(f"{m.name} {m.width}x{m.height}" for m in mons)
 
 
-def t_unescape():
-    from screenmanget.discovery import _unescape
+def t_zeroconf():
+    import zeroconf
 
-    # avahi escapes bytes as \\ddd; this is the curly apostrophe in a real TV name.
-    got = _unescape("LG\\032webOS\\032duncan\\226\\128\\153s\\032donut\\032TV")
-    return got == "LG webOS duncan’s donut TV", repr(got)
+    from screenmanget.discovery import _is_ipv4
+
+    assert _is_ipv4("192.168.1.24") and not _is_ipv4("fe80::1"), "IPv4 filter wrong"
+    return True, f"python-zeroconf {zeroconf.__version__}, IPv4 filter ok"
 
 
 def t_discovery():
     from screenmanget.discovery import discover
 
-    screens = discover(timeout=8)
+    screens = discover(seconds=4)
     if not screens:
         return None, "no AirPlay screens answered (TV off?)"
     return True, ", ".join(f"{s.name} @ {s.ip}" for s in screens)
@@ -124,9 +125,9 @@ if __name__ == "__main__":
     check("PySide6 available", t_pyside)
     check("app modules import", t_modules)
     check("doubletake binary built", t_binary)
-    check("preflight (distrobox/binary/avahi)", t_preflight)
+    check("preflight (distrobox/binary)", t_preflight)
     check("monitor enumeration", t_monitors)
-    check("avahi name unescaping", t_unescape)
+    check("zeroconf + IPv4 filter", t_zeroconf)
     check("doubletake CLI flags", t_doubletake_flags)
     check("Qt widgets construct (offscreen)", t_widgets)
     check("live AirPlay discovery", t_discovery)

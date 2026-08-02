@@ -1,4 +1,18 @@
-"""Enumerate the monitors we could send to a screen."""
+"""Enumerate the monitors we could send to a screen.
+
+Qt is the source of truth so this works identically on X11, Wayland and Windows.
+xrandr remains as a fallback for the case where no Qt application exists yet.
+
+Two things to be careful about:
+
+* ``QScreen.geometry()`` is in LOGICAL pixels. On a 125% display a 1920x1080
+  panel reports 1536x864. Capture crops are in physical pixels, so every
+  dimension here is scaled by ``devicePixelRatio``.
+* ``QScreen.name()`` matches the xrandr output name on X11 ("DisplayPort-1",
+  "eDP"), which is exactly what doubletake's ``-monitor`` flag expects. On
+  Windows it is a device path like ``\\\\.\\DISPLAY1`` instead, so a Windows
+  capture backend must select by index or geometry rather than by name.
+"""
 
 from __future__ import annotations
 
@@ -28,12 +42,43 @@ class Monitor:
         return f"{self.name}  {self.width}×{self.height}{star}"
 
 
-def list_monitors() -> list[Monitor]:
+def _from_qt() -> list[Monitor]:
+    """Enumerate via Qt. Returns [] when no QGuiApplication exists yet."""
+    try:
+        from PySide6.QtGui import QGuiApplication
+    except ImportError:
+        return []
+
+    app = QGuiApplication.instance()
+    if app is None:
+        return []
+
+    primary = QGuiApplication.primaryScreen()
+    monitors = []
+    for s in QGuiApplication.screens():
+        g = s.geometry()
+        # Logical -> physical pixels; capture crops are physical.
+        r = s.devicePixelRatio() or 1.0
+        monitors.append(
+            Monitor(
+                name=s.name() or "screen",
+                width=int(round(g.width() * r)),
+                height=int(round(g.height() * r)),
+                x=int(round(g.x() * r)),
+                y=int(round(g.y() * r)),
+                primary=(s == primary),
+            )
+        )
+    return monitors
+
+
+def _from_xrandr() -> list[Monitor]:
+    """Fallback for when Qt isn't up yet. X11 only; already physical pixels."""
     try:
         out = subprocess.run(
             ["xrandr", "--query"], capture_output=True, text=True, timeout=6
         ).stdout
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return []
 
     monitors = []
@@ -51,5 +96,10 @@ def list_monitors() -> list[Monitor]:
                 primary=bool(m["primary"]),
             )
         )
-    # Primary first, then left-to-right.
+    return monitors
+
+
+def list_monitors() -> list[Monitor]:
+    monitors = _from_qt() or _from_xrandr()
+    # Primary first, then left to right.
     return sorted(monitors, key=lambda mo: (not mo.primary, mo.x))

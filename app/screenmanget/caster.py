@@ -41,8 +41,6 @@ def preflight() -> list[str]:
         problems.append("distrobox is not installed")
     if not BINARY.exists():
         problems.append(f"doubletake binary missing at {BINARY}")
-    if not shutil.which("avahi-browse"):
-        problems.append("avahi-browse missing (is avahi-daemon installed?)")
     return problems
 
 

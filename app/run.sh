@@ -7,7 +7,7 @@
 # 3.14 wheels.
 set -euo pipefail
 
-VENV="${SCREENMANGET_VENV:-$HOME/.local/share/screenmagnet/venv}"
+VENV="${SCREENMAGNET_VENV:-$HOME/.local/share/screenmagnet/venv}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ ! -x "$VENV/bin/python" ]; then

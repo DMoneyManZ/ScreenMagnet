@@ -25,3 +25,6 @@ venv/
 
 # Paired receiver credentials must never leave this machine
 credentials.json
+
+# Local restore points (git tags serve this purpose)
+.backups/

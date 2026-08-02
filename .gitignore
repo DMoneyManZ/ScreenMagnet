@@ -1,0 +1,27 @@
+# Upstream clone of omarroth/doubletake (LGPL) with our local patches.
+# Not vendored — our changes live in patches/ instead. Recreate with
+# spike/build-doubletake.sh, then apply the patch.
+spike/doubletake/
+
+# Backported mt76 kernel modules — 20MB of build artefacts, and they only ever
+# match one exact kernel build. Rebuild rather than store.
+spike/mt76-p2p-611/
+
+# LoRA training corpus: learning data, never committed.
+lora/corpus.jsonl
+lora/adapter/
+lora/*.gguf
+
+# Run logs (contain LAN addresses and session details)
+*.log
+spike/*.log
+
+# Build/runtime
+__pycache__/
+*.py[cod]
+bin/
+venv/
+.venv/
+
+# Paired receiver credentials must never leave this machine
+credentials.json

@@ -1,0 +1,225 @@
+diff --git a/cmd/doubletake/main.go b/cmd/doubletake/main.go
+index 6dd928c..62db028 100644
+--- a/cmd/doubletake/main.go
++++ b/cmd/doubletake/main.go
+@@ -63,6 +63,9 @@ func main() {
+ 	credBackend := flag.String("cred-backend", "file", "Credential storage backend: file or keyring (system keyring via Secret Service)")
+ 	forcePair := flag.Bool("pair", false, "Force new pairing even if credentials exist")
+ 	fps := flag.Int("fps", 30, "Frames per second")
++	monitor := flag.String("monitor", "", "xrandr output name to capture (e.g. eDP, DisplayPort-1); empty = primary monitor")
++	playoutFloorMs := flag.Int("playout-floor-ms", -1, "Override the receiver playout floor in ms (-1 = per-receiver default, 500ms for non-FairPlay receivers). 0 minimises latency but removes the audio jitter safety margin.")
++	keyInt := flag.Int("key-int", 0, "Keyframe interval in frames (0 = one per second). Lower reduces time-to-first-picture and receiver GOP buffering at some bitrate cost.")
+ 	bitrate := flag.Int("bitrate", 0, "Video bitrate in kbps (0 = auto, default tunes for resolution/FPS)")
+ 	targetLatencyMs := flag.Int("target-latency-ms", 100, "Target end-to-end latency in milliseconds (applies to audio and video timing)")
+ 	hwaccel := flag.String("hwaccel", "auto", "Hardware acceleration: auto, nvenc, vaapi, none")
+@@ -79,6 +82,14 @@ func main() {
+ 	noCursor := flag.Bool("no-cursor", false, "Don't show the mouse cursor in the captured video")
+ 	flag.Parse()
+ 
++	if *keyInt > 0 {
++		airplay.SetKeyframeInterval(*keyInt)
++	}
++
++	if *playoutFloorMs >= 0 {
++		airplay.SetPlayoutFloorOverride(time.Duration(*playoutFloorMs) * time.Millisecond)
++	}
++
+ 	airplay.SetTargetLatency(time.Duration(*targetLatencyMs) * time.Millisecond)
+ 
+ 	airplay.DebugMode = *debug
+@@ -299,12 +310,19 @@ func main() {
+ 		if creds := credStore.Lookup(info.DeviceID); creds != nil {
+ 			restoreToken = creds.RestoreToken
+ 		}
++		// Scale capture to the receiver's advertised display size; a mismatch
++		// between the encoded resolution and the negotiated session size makes
++		// receivers render black.
++		rxW, rxH := info.DisplaySize()
+ 		captureCfg := airplay.CaptureConfig{
+ 			FPS:           *fps,
+ 			Bitrate:       *bitrate,
+ 			HWAccel:       *hwaccel,
+ 			X11WindowID:   xid,
+ 			X11WindowName: *x11WindowName,
++			MonitorName:   *monitor,
++			Width:         rxW,
++			Height:        rxH,
+ 			ShowCursor:    !*noCursor,
+ 			RestoreToken:  restoreToken,
+ 			SaveRestoreToken: func(token string) error {
+diff --git a/internal/airplay/capture.go b/internal/airplay/capture.go
+index e9646ae..24834c4 100644
+--- a/internal/airplay/capture.go
++++ b/internal/airplay/capture.go
+@@ -24,6 +24,18 @@ type CaptureConfig struct {
+ 	X11WindowID   uint64
+ 	X11WindowName string
+ 
++	// MonitorName selects which xrandr output to capture (e.g. "eDP",
++	// "DisplayPort-1"). Empty means the primary monitor.
++	MonitorName string
++
++	// Width and Height are the receiver's negotiated display size in pixels.
++	// When both are > 0 the captured frame is scaled to exactly these
++	// dimensions before encoding. Without this the encoder emits the source
++	// monitor's native resolution while the AirPlay session advertised the
++	// receiver's size, and the receiver renders a black screen.
++	Width  int
++	Height int
++
+ 	ShowCursor bool // show the mouse cursor in the captured video (Wayland and X11)
+ 
+ 	RestoreToken     string
+@@ -219,7 +231,16 @@ func startX11Capture(ctx context.Context, cfg CaptureConfig) (*ScreenCapture, er
+ 		// (all monitors combined). On multi-monitor setups this wastes CPU on pixels
+ 		// we don't need, so crop to the primary monitor. The encoded resolution is
+ 		// then the primary monitor's native resolution (no rescaling).
+-		startX, startY, endX, endY := detectPrimaryMonitor(display)
++		var startX, startY, endX, endY int
++		if cfg.MonitorName != "" {
++			startX, startY, endX, endY = detectNamedMonitor(display, cfg.MonitorName)
++			if endX > startX && endY > startY {
++				dbg("[CAPTURE] selected monitor %q", cfg.MonitorName)
++			}
++		}
++		if endX <= startX || endY <= startY {
++			startX, startY, endX, endY = detectPrimaryMonitor(display)
++		}
+ 		if endX > startX && endY > startY {
+ 			ximageSrcArgs = append(ximageSrcArgs,
+ 				fmt.Sprintf("startx=%d", startX),
+@@ -237,8 +258,25 @@ func startX11Capture(ctx context.Context, cfg CaptureConfig) (*ScreenCapture, er
+ 		"!", fmt.Sprintf("video/x-raw,framerate=%d/1", fps),
+ 		"!", "queue", "max-size-buffers=1", "max-size-bytes=0", "max-size-time=0", "leaky=downstream",
+ 		"!", "videoconvert",
+-		"!", fmt.Sprintf("video/x-raw,format=%s", encoder.rawFormat),
+ 	)
++	// Scale to the receiver's negotiated display size. ximagesrc emits the
++	// source monitor's native resolution (e.g. 2560x1440), but the mirror
++	// session advertised the receiver's size (e.g. 1920x1080). Sending H.264
++	// whose dimensions contradict the negotiated session makes receivers
++	// display black. add-borders letterboxes instead of distorting when the
++	// aspect ratios differ (e.g. a 16:10 handheld panel to a 16:9 TV).
++	if cfg.Width > 0 && cfg.Height > 0 {
++		gstArgs = append(gstArgs,
++			"!", "videoscale", "add-borders=true",
++			"!", fmt.Sprintf("video/x-raw,format=%s,width=%d,height=%d,pixel-aspect-ratio=1/1",
++				encoder.rawFormat, cfg.Width, cfg.Height),
++		)
++		dbg("[CAPTURE] scaling to receiver display size %dx%d", cfg.Width, cfg.Height)
++	} else {
++		gstArgs = append(gstArgs,
++			"!", fmt.Sprintf("video/x-raw,format=%s", encoder.rawFormat),
++		)
++	}
+ 	if encoder.needsVulkan {
+ 		gstArgs = append(gstArgs, "!", "vulkanupload")
+ 	}
+@@ -336,6 +374,27 @@ func (sc *ScreenCapture) Stop() {
+ // Returns (startX, startY, endX, endY) bounding the primary monitor, where
+ // endX = startX + monitor_width and endY = startY + monitor_height. If
+ // detection fails it returns all zeros, meaning no cropping should be applied.
++// detectNamedMonitor returns the geometry of a specific xrandr output (e.g.
++// "eDP", "DisplayPort-1"). Returns zeros if the output is not found or not
++// connected, in which case the caller should fall back to the primary monitor.
++func detectNamedMonitor(display, name string) (startX, startY, endX, endY int) {
++	out, err := exec.Command("xrandr", "--display", display, "--query").Output()
++	if err != nil {
++		dbg("[CAPTURE] xrandr failed: %v, cannot select monitor %q", err, name)
++		return 0, 0, 0, 0
++	}
++	for _, line := range strings.Split(string(out), "\n") {
++		if !strings.HasPrefix(line, name+" ") || !strings.Contains(line, " connected") {
++			continue
++		}
++		if x, y, w, h, ok := parseXrandrGeometry(line); ok {
++			return x, y, x + w, y + h
++		}
++	}
++	dbg("[CAPTURE] monitor %q not found among connected outputs", name)
++	return 0, 0, 0, 0
++}
++
+ func detectPrimaryMonitor(display string) (startX, startY, endX, endY int) {
+ 	// Run xrandr to get connected outputs with geometry
+ 	out, err := exec.Command("xrandr", "--display", display, "--query").Output()
+@@ -641,9 +700,22 @@ func keyframeIntervalFrames(fps int) int {
+ 	if fps <= 0 {
+ 		fps = 30
+ 	}
++	if n := keyframeIntervalOverride; n > 0 {
++		return n
++	}
++	// Measured 2026-08-01 against an LG 43UK6090PUA: shortening this to 0.5s made
++	// no difference to end-to-end latency (~1.4s), so the receiver is not waiting
++	// on GOP boundaries. Left at the upstream default; use -key-int to experiment.
+ 	return fps * 4
+ }
+ 
++// keyframeIntervalOverride, when > 0, forces the keyframe interval in frames.
++// Set from the -key-int flag for latency experiments.
++var keyframeIntervalOverride int
++
++// SetKeyframeInterval overrides the computed keyframe interval (in frames).
++func SetKeyframeInterval(frames int) { keyframeIntervalOverride = frames }
++
+ // vbvBufferKbit returns the x264 VBV buffer size in kbit for the given bitrate
+ // and FPS. Sized at ~2 frames of data — enough headroom for the encoder to
+ // handle scene changes without severe quality oscillation, but tight enough to
+diff --git a/internal/airplay/discovery.go b/internal/airplay/discovery.go
+index 7f0c446..d6e6ac9 100644
+--- a/internal/airplay/discovery.go
++++ b/internal/airplay/discovery.go
+@@ -275,6 +275,11 @@ func (i *ReceiverInfo) SupportsFairPlaySAP() bool {
+ // (Roku and other third-party AirPlay implementations) need a conservative lead
+ // or they drop audio they can no longer schedule.
+ func (i *ReceiverInfo) playoutLatencyFloor() time.Duration {
++	// An explicit operator override wins over the receiver-derived default;
++	// see SetPlayoutFloorOverride.
++	if d, ok := playoutFloorOverride(); ok {
++		return d
++	}
+ 	if i != nil && i.SupportsFairPlaySAP() {
+ 		return 0
+ 	}
+diff --git a/internal/airplay/latency.go b/internal/airplay/latency.go
+index f862c86..2d336d2 100644
+--- a/internal/airplay/latency.go
++++ b/internal/airplay/latency.go
+@@ -22,8 +22,36 @@ const conservativePlayoutLatency = 500 * time.Millisecond
+ 
+ var targetLatencyNS atomic.Int64
+ 
++// playoutFloorOverrideNS, when >= 0, replaces the per-receiver playout floor.
++// Measured on an LG 43UK6090PUA (2026-08-01): the receiver honours our
++// presentation timestamps ~1:1, so this floor is ~500ms of the ~1.4s observed
++// end-to-end latency. Overriding it to 0 trades audio safety margin for
++// responsiveness -- appropriate when mirroring a desktop, not when the audio
++// matters. -1 means "use the receiver-derived default".
++var playoutFloorOverrideNS atomic.Int64
++
+ func init() {
+ 	targetLatencyNS.Store(int64(defaultTargetLatency))
++	playoutFloorOverrideNS.Store(-1)
++}
++
++// SetPlayoutFloorOverride forces the receiver playout floor. Pass a negative
++// duration to restore the per-receiver default.
++func SetPlayoutFloorOverride(d time.Duration) {
++	if d < 0 {
++		playoutFloorOverrideNS.Store(-1)
++		return
++	}
++	playoutFloorOverrideNS.Store(int64(d))
++}
++
++// playoutFloorOverride returns the override and whether one is set.
++func playoutFloorOverride() (time.Duration, bool) {
++	v := playoutFloorOverrideNS.Load()
++	if v < 0 {
++		return 0, false
++	}
++	return time.Duration(v), true
+ }
+ 
+ // SetTargetLatency sets the desired end-to-end playout latency target.

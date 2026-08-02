@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=ScreenManget
+GenericName=Screen Caster
+Comment=Cast this machine's screen to a TV
+Exec=/home/deck/.claude/ScreenManget/app/run.sh
+Icon=/home/deck/.claude/ScreenManget/app/assets/screenmanget.svg
+Terminal=false
+Categories=Utility;AudioVideo;
+Keywords=cast;mirror;airplay;screen;tv;
+StartupWMClass=screenmanget
+X-GNOME-UsesNotifications=true

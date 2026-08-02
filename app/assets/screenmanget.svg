@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- screen body -->
+  <rect x="4" y="10" width="56" height="37" rx="5" fill="none"
+        stroke="currentColor" stroke-width="4"/>
+  <!-- cast waves, echoing the chasing-arrows scan motif -->
+  <path d="M19 36a13 13 0 0 1 13-13" fill="none" stroke="currentColor"
+        stroke-width="4" stroke-linecap="round"/>
+  <path d="M26 36a6 6 0 0 1 6-6" fill="none" stroke="currentColor"
+        stroke-width="4" stroke-linecap="round"/>
+  <circle cx="38" cy="35" r="2.6" fill="currentColor"/>
+  <!-- stand -->
+  <path d="M32 47v6M22 57h20" fill="none" stroke="currentColor"
+        stroke-width="4" stroke-linecap="round"/>
+</svg>

@@ -48,7 +48,7 @@ index 6dd928c..62db028 100644
  			RestoreToken:  restoreToken,
  			SaveRestoreToken: func(token string) error {
 diff --git a/internal/airplay/capture.go b/internal/airplay/capture.go
-index e9646ae..24834c4 100644
+index e9646ae..42033b6 100644
 --- a/internal/airplay/capture.go
 +++ b/internal/airplay/capture.go
 @@ -24,6 +24,18 @@ type CaptureConfig struct {
@@ -70,7 +70,84 @@ index e9646ae..24834c4 100644
  	ShowCursor bool // show the mouse cursor in the captured video (Wayland and X11)
  
  	RestoreToken     string
-@@ -219,7 +231,16 @@ func startX11Capture(ctx context.Context, cfg CaptureConfig) (*ScreenCapture, er
+@@ -53,24 +65,63 @@ type ScreenCapture struct {
+ 	stopped  bool
+ }
+ 
+-// StartCapture detects the display server (Wayland or X11) and initiates screen
+-// capture accordingly. On Wayland it uses xdg-desktop-portal + PipeWire for
+-// capture; on X11 it uses ximagesrc. Both use GStreamer for H.264 encoding.
++// StartCapture begins screen capture using the platform's backend: xdg-desktop-portal
++// + PipeWire on Wayland, ximagesrc on X11, d3d11screencapturesrc on Windows. All of
++// them feed GStreamer for H.264 encoding. See capture_unix.go / capture_windows.go.
+ func StartCapture(ctx context.Context, cfg CaptureConfig) (*ScreenCapture, error) {
+-	if (cfg.X11WindowID != 0 || cfg.X11WindowName != "") && os.Getenv("DISPLAY") != "" {
+-		return startX11Capture(ctx, cfg)
++	return startPlatformCapture(ctx, cfg)
++}
++
++func hasGstElement(name string) bool {
++	return exec.Command(gstBinaryInspect(), name).Run() == nil
++}
++
++func gstBinaryInspect() string {
++	if strings.HasSuffix(gstBinary, ".exe") {
++		return "gst-inspect-1.0.exe"
+ 	}
+-	if os.Getenv("WAYLAND_DISPLAY") != "" {
+-		return startWaylandCapture(ctx, cfg)
++	return "gst-inspect-1.0"
++}
++
++// encoderUsable checks that an encoder can actually encode, not merely that its
++// element factory is registered.
++//
++// gst-inspect only reads the plugin registry, so it happily reports success for
++// an encoder whose hardware isn't present -- which is how `-hwaccel auto`
++// selected vulkanh264enc (NVENC) on an AMD machine and killed the pipeline on
++// its first frame. Pushing two frames through a real pipeline exercises the
++// NULL->PLAYING transition, where opening the device/session actually fails.
++func encoderUsable(parts []string, rawFormat, upload string) bool {
++	if len(parts) == 0 {
++		return false
+ 	}
+-	if os.Getenv("DISPLAY") != "" {
+-		return startX11Capture(ctx, cfg)
++	if !hasGstElement(parts[0]) {
++		return false
+ 	}
+-	return nil, fmt.Errorf("no display server detected (neither WAYLAND_DISPLAY nor DISPLAY is set)")
+-}
+ 
+-func hasGstElement(name string) bool {
+-	return exec.Command("gst-inspect-1.0", name).Run() == nil
++	format := rawFormat
++	if format == "" {
++		format = "NV12"
++	}
++	args := []string{
++		"-q", "videotestsrc", "num-buffers=2",
++		"!", fmt.Sprintf("video/x-raw,format=%s,width=64,height=64", format),
++	}
++	if upload != "" {
++		args = append(args, "!", upload)
++	}
++	args = append(args, "!")
++	args = append(args, parts...)
++	args = append(args, "!", "fakesink")
++
++	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
++	defer cancel()
++
++	if err := exec.CommandContext(ctx, gstBinary, args...).Run(); err != nil {
++		dbg("[CAPTURE] %s probe failed, skipping: %v", parts[0], err)
++		return false
++	}
++	return true
+ }
+ 
+ func startWaylandCapture(ctx context.Context, cfg CaptureConfig) (*ScreenCapture, error) {
+@@ -219,7 +270,16 @@ func startX11Capture(ctx context.Context, cfg CaptureConfig) (*ScreenCapture, er
  		// (all monitors combined). On multi-monitor setups this wastes CPU on pixels
  		// we don't need, so crop to the primary monitor. The encoded resolution is
  		// then the primary monitor's native resolution (no rescaling).
@@ -88,7 +165,7 @@ index e9646ae..24834c4 100644
  		if endX > startX && endY > startY {
  			ximageSrcArgs = append(ximageSrcArgs,
  				fmt.Sprintf("startx=%d", startX),
-@@ -237,8 +258,25 @@ func startX11Capture(ctx context.Context, cfg CaptureConfig) (*ScreenCapture, er
+@@ -237,8 +297,25 @@ func startX11Capture(ctx context.Context, cfg CaptureConfig) (*ScreenCapture, er
  		"!", fmt.Sprintf("video/x-raw,framerate=%d/1", fps),
  		"!", "queue", "max-size-buffers=1", "max-size-bytes=0", "max-size-time=0", "leaky=downstream",
  		"!", "videoconvert",
@@ -115,7 +192,7 @@ index e9646ae..24834c4 100644
  	if encoder.needsVulkan {
  		gstArgs = append(gstArgs, "!", "vulkanupload")
  	}
-@@ -336,6 +374,27 @@ func (sc *ScreenCapture) Stop() {
+@@ -336,6 +413,27 @@ func (sc *ScreenCapture) Stop() {
  // Returns (startX, startY, endX, endY) bounding the primary monitor, where
  // endX = startX + monitor_width and endY = startY + monitor_height. If
  // detection fails it returns all zeros, meaning no cropping should be applied.
@@ -143,7 +220,117 @@ index e9646ae..24834c4 100644
  func detectPrimaryMonitor(display string) (startX, startY, endX, endY int) {
  	// Run xrandr to get connected outputs with geometry
  	out, err := exec.Command("xrandr", "--display", display, "--query").Output()
-@@ -641,9 +700,22 @@ func keyframeIntervalFrames(fps int) int {
+@@ -441,57 +539,77 @@ func detectGstEncoder(cfg CaptureConfig) encoderResult {
+ 	keyframeInterval := keyframeIntervalFrames(fps)
+ 	hwaccel := cfg.HWAccel
+ 
+-	// Try Vulkan H.264 (NVENC via Vulkan API) — lowest latency, no CPU usage
++	// Hardware encoders, best first. Each is probed by actually encoding two
++	// frames -- see encoderUsable -- because a registered element factory says
++	// nothing about whether the hardware is present.
++
++	// Vulkan (NVENC via the Vulkan API)
+ 	if hwaccel == "auto" || hwaccel == "nvenc" {
+-		if exec.Command("gst-inspect-1.0", "vulkanh264enc").Run() == nil {
+-			log.Printf("[CAPTURE] using NVENC hardware encoding (vulkanh264enc)")
+-			return encoderResult{
+-				parts: []string{
+-					"vulkanh264enc",
+-					"b-frames=0",
+-					fmt.Sprintf("idr-period=%d", keyframeInterval),
+-					"rate-control=cbr",
+-					fmt.Sprintf("bitrate=%d", bitrate),
+-				},
+-				needsVulkan: true,
+-				rawFormat:   "NV12",
+-			}
++		parts := []string{
++			"vulkanh264enc",
++			"b-frames=0",
++			fmt.Sprintf("idr-period=%d", keyframeInterval),
++			"rate-control=cbr",
++			fmt.Sprintf("bitrate=%d", bitrate),
++		}
++		if encoderUsable(parts, "NV12", "vulkanupload") {
++			log.Printf("[CAPTURE] using Vulkan hardware encoding (vulkanh264enc)")
++			return encoderResult{parts: parts, needsVulkan: true, rawFormat: "NV12"}
+ 		}
+ 	}
+ 
+-	// Try legacy NVENC
++	// NVENC (NVIDIA). nvd3d11h264enc is the Windows D3D11-aware variant.
+ 	if hwaccel == "auto" || hwaccel == "nvenc" {
+-		if exec.Command("gst-inspect-1.0", "nvh264enc").Run() == nil {
+-			log.Printf("[CAPTURE] using NVENC hardware encoding (nvh264enc)")
+-			return encoderResult{rawFormat: "NV12", parts: []string{
+-				"nvh264enc",
++		for _, name := range []string{"nvh264enc", "nvd3d11h264enc"} {
++			parts := []string{
++				name,
+ 				fmt.Sprintf("bitrate=%d", bitrate),
+ 				fmt.Sprintf("gop-size=%d", keyframeInterval),
+ 				"bframes=0",
+ 				"rc-mode=cbr",
+-				"preset=low-latency-hq",
+ 				"zerolatency=true",
+-			}}
++			}
++			if encoderUsable(parts, "NV12", "") {
++				log.Printf("[CAPTURE] using NVENC hardware encoding (%s)", name)
++				return encoderResult{rawFormat: "NV12", parts: parts}
++			}
+ 		}
+ 		if hwaccel == "nvenc" {
+-			dbg("[CAPTURE] nvh264enc not available, falling back to software")
++			dbg("[CAPTURE] no usable NVENC encoder, falling back")
+ 		}
+ 	}
+ 
+-	// Try VAAPI
++	// VAAPI (Intel/AMD on Linux)
+ 	if hwaccel == "auto" || hwaccel == "vaapi" {
+-		if exec.Command("gst-inspect-1.0", "vah264enc").Run() == nil {
++		parts := []string{
++			"vah264enc",
++			fmt.Sprintf("bitrate=%d", bitrate),
++			fmt.Sprintf("key-int-max=%d", keyframeInterval),
++			"b-frames=0",
++			"rate-control=cbr",
++		}
++		if encoderUsable(parts, "NV12", "") {
+ 			log.Printf("[CAPTURE] using VAAPI hardware encoding (vah264enc)")
+-			return encoderResult{rawFormat: "NV12", parts: []string{
+-				"vah264enc",
+-				fmt.Sprintf("bitrate=%d", bitrate),
+-				fmt.Sprintf("key-int-max=%d", keyframeInterval),
+-				"b-frames=0",
+-				"rate-control=cbr",
+-			}}
++			return encoderResult{rawFormat: "NV12", parts: parts}
+ 		}
+ 		if hwaccel == "vaapi" {
+-			dbg("[CAPTURE] vah264enc not available, falling back to software")
++			dbg("[CAPTURE] vah264enc not usable, falling back")
++		}
++	}
++
++	// Media Foundation (Windows, any vendor with a registered H.264 MFT)
++	if hwaccel == "auto" || hwaccel == "mediafoundation" {
++		parts := []string{
++			"mfh264enc",
++			"low-latency=true",
++			"bframes=0",
++			fmt.Sprintf("gop-size=%d", keyframeInterval),
++			"rc-mode=cbr",
++			fmt.Sprintf("bitrate=%d", bitrate),
++		}
++		if encoderUsable(parts, "NV12", "") {
++			log.Printf("[CAPTURE] using Media Foundation hardware encoding (mfh264enc)")
++			return encoderResult{rawFormat: "NV12", parts: parts}
+ 		}
+ 	}
+ 
+@@ -641,9 +759,22 @@ func keyframeIntervalFrames(fps int) int {
  	if fps <= 0 {
  		fps = 30
  	}

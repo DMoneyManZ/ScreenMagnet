@@ -4,8 +4,11 @@ doubletake runs inside a distrobox container because the SteamOS host has no H.2
 GStreamer encoder at all and its root filesystem is read-only. The container has
 x264enc + openh264enc.
 
--hwaccel none is not optional: doubletake's `auto` picks NVENC (vulkanh264enc) on
-this AMD machine and the pipeline dies on the first frame.
+Encoder selection is left on `auto`. It used to have to be forced to `none`
+because doubletake picked an encoder whenever its element factory was merely
+registered -- selecting NVENC on this AMD machine, where the pipeline died on
+the first frame. It now probes by encoding two real frames, so `auto` degrades
+to software correctly here and will find hardware on machines that have it.
 """
 
 from __future__ import annotations
@@ -90,7 +93,7 @@ class Caster(QObject):
             "exec",
             "./bin/doubletake",
             "-target", ip,
-            "-hwaccel", "none",          # `auto` picks NVENC on AMD and dies
+            "-hwaccel", "auto",          # probes encoders for real; falls back to x264enc
             "-fps", str(fps),
             "-target-latency-ms", "80",
         ]

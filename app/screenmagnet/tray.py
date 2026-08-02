@@ -1,4 +1,4 @@
-"""ScreenManget — a system-tray panel for throwing this machine's screen at a TV."""
+"""ScreenMagnet — a system-tray panel for throwing this machine's screen at a TV."""
 
 from __future__ import annotations
 
@@ -36,8 +36,8 @@ from .discovery import DiscoveryThread, Screen
 from .monitors import list_monitors
 from .spinner import ChasingArrows
 
-APP_NAME = "ScreenManget"
-CONFIG = Path.home() / ".config/screenmanget/config.json"
+APP_NAME = "ScreenMagnet"
+CONFIG = Path.home() / ".config/screenmagnet/config.json"
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
 
@@ -58,7 +58,7 @@ def save_config(data: dict) -> None:
 
 def app_icon() -> QIcon:
     """A screen glyph. Prefers the shipped SVG, falls back to a drawn pixmap."""
-    svg = ASSETS / "screenmanget.svg"
+    svg = ASSETS / "screenmagnet.svg"
     if svg.exists():
         icon = QIcon(str(svg))
         if not icon.isNull():
@@ -118,7 +118,7 @@ class ScreenRow(QPushButton):
 class Panel(QWidget):
     """The flyout that appears when the tray icon is clicked."""
 
-    def __init__(self, tray: "ScreenMangetTray"):
+    def __init__(self, tray: "ScreenMagnetTray"):
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.Popup)
         self.tray = tray
         self.setMinimumWidth(340)
@@ -301,7 +301,7 @@ class Panel(QWidget):
         self.status.setStyleSheet("color: palette(link-visited);" if warn else "")
 
 
-class ScreenMangetTray(QSystemTrayIcon):
+class ScreenMagnetTray(QSystemTrayIcon):
     def __init__(self, app: QApplication):
         super().__init__(app_icon(), app)
         self.app = app

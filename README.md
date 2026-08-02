@@ -1,4 +1,4 @@
-# ScreenManget
+# ScreenMagnet
 
 Cast this machine's screen to a TV, from the system tray.
 
@@ -18,7 +18,7 @@ goes to the TV if you have more than one.
 
 ```
 app/                  the PySide6 tray application
-  screenmanget/
+  screenmagnet/
     tray.py           tray icon + popup panel
     spinner.py        the chasing-arrows scan indicator
     discovery.py      mDNS discovery, with reachability verification
@@ -42,21 +42,71 @@ First run needs a venv. **It must be Python 3.13** — the default python on thi
 and PySide6 publishes no 3.14 wheels:
 
 ```bash
-python3.13 -m venv ~/.local/share/screenmanget/venv
-~/.local/share/screenmanget/venv/bin/pip install PySide6
+python3.13 -m venv ~/.local/share/screenmagnet/venv
+~/.local/share/screenmagnet/venv/bin/pip install PySide6
 ```
 
 Then the streaming backend, which lives in a container (see below):
 
 ```bash
 spike/build-doubletake.sh
-cd spike/doubletake && git apply ../../patches/0001-screenmanget-fixes.patch
-distrobox enter screenmanget -- bash -lc 'cd ~/.claude/ScreenManget/spike/doubletake && go build -o bin/doubletake ./cmd/doubletake'
+cd spike/doubletake && git apply ../../patches/0001-screenmagnet-fixes.patch
+distrobox enter screenmagnet -- bash -lc 'cd ~/.claude/ScreenMagnet/spike/doubletake && go build -o bin/doubletake ./cmd/doubletake'
 ```
 
 Verify with `app/tests/smoke_test.py`.
 
-## Why a container
+## Running it on Windows
+
+Windows needs no container — GStreamer for Windows ships the encoders, including
+hardware ones, so `-hwaccel auto` will find NVENC or Media Foundation.
+
+**1. GStreamer.** Install the *runtime* MSI from
+[gstreamer.freedesktop.org](https://gstreamer.freedesktop.org/download/), choosing a
+**Complete** install (the default "Typical" omits the *bad* and *ugly* plugin sets, which
+hold `d3d11screencapturesrc` and `x264enc`). Add its `bin\` directory to `PATH`, then check:
+
+```
+gst-inspect-1.0 d3d11screencapturesrc
+gst-inspect-1.0 x264enc
+```
+
+**2. Build the sender.** With Go installed, from this repo:
+
+```
+cd spike\doubletake
+git apply ..\..\patches\0001-screenmagnet-fixes.patch
+go build -o bin\doubletake.exe .\cmd\doubletake
+```
+
+Or cross-compile it on Linux and copy the .exe over:
+`GOOS=windows GOARCH=amd64 go build -o doubletake.exe ./cmd/doubletake`
+
+**3. Python.** Must be **3.13** — PySide6 publishes no 3.14 wheels.
+
+```
+py -3.13 -m venv %LOCALAPPDATA%\screenmagnet\venv
+%LOCALAPPDATA%\screenmagnet\venv\Scripts\pip install PySide6 zeroconf
+```
+
+**4. Run** `app\run.bat`. If `doubletake.exe` isn't at `spike\doubletake\bin\`, point
+`SCREENMAGNET_DOUBLETAKE` at wherever it is.
+
+### Windows differences worth knowing
+
+- Capture is `d3d11screencapturesrc` (DXGI Desktop Duplication) rather than `ximagesrc`.
+- **The stream travels over a loopback TCP connection, not stdout.** GStreamer's `fdsink`
+  never sets its descriptor to binary mode, and the MSVCRT defaults to text mode, where
+  every `0x0A` byte becomes `0x0D 0x0A`. Annex-B H.264 is full of `0x0A` bytes, so `fdsink
+  fd=1` corrupts the stream in a way that reads as a codec fault.
+- Monitors are selected by **index**, not name: `QScreen.name()` returns an xrandr output
+  name on X11 but a device path like `\\.\DISPLAY1` on Windows.
+- DXGI capture does not work over an **RDP** session; that needs `capture-api=wgc`.
+
+**Untested.** The Windows path is written but has never been run — it cross-compiles and
+vets clean, nothing more. Expect to find something.
+
+## Why a container (Linux)
 
 This host has **no H.264 GStreamer encoder at all** — `x264enc`, `openh264enc`, `vah264enc`
 and `vaapih264enc` are all absent — and `steamos-readonly` is enabled, so they can't be

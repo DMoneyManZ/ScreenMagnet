@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Train a LoRA adapter for qwen3.5:4b on the ScreenManget development corpus.
+Train a LoRA adapter for qwen3.5:4b on the ScreenMagnet development corpus.
 
 This is the step Ollama cannot do. Run it in a python3.13 venv -- torch has no
 3.14 wheels, and 3.14 is this box's default python. See README.md.
 
-    python3.13 -m venv ~/.local/share/screenmanget/loravenv
-    source ~/.local/share/screenmanget/loravenv/bin/activate
+    python3.13 -m venv ~/.local/share/screenmagnet/loravenv
+    source ~/.local/share/screenmagnet/loravenv/bin/activate
     pip install torch --index-url https://download.pytorch.org/whl/cpu
     pip install transformers peft datasets accelerate
 
@@ -28,7 +28,7 @@ OUTDIR = HERE / "adapter"
 BASE_MODEL = "Qwen/Qwen3.5-4B"
 
 PROMPT = (
-    "You are observing the ScreenManget project being built.\n\n"
+    "You are observing the ScreenMagnet project being built.\n\n"
     "STEP: {step}\n\nWHAT HAPPENED:\n{detail}\n\nExplain this step:"
 )
 
@@ -144,7 +144,7 @@ def train(base, epochs, rank, lr, max_len):
     print("  python llama.cpp/convert_lora_to_gguf.py "
           f"{OUTDIR} --outfile {HERE}/adapter.gguf")
     print(f"  printf 'FROM qwen3.5:4b\\nADAPTER {HERE}/adapter.gguf\\n' "
-          "> Modelfile && ollama create screenmanget-qwen -f Modelfile")
+          "> Modelfile && ollama create screenmagnet-qwen -f Modelfile")
 
 
 if __name__ == "__main__":

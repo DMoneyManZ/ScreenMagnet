@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ScreenManget smoke test.
+"""ScreenMagnet smoke test.
 
 Checks the things that actually break: imports, the backend binary, discovery
 plumbing, monitor enumeration, and that the Qt widgets can be constructed
@@ -43,26 +43,26 @@ def t_pyside():
 
 
 def t_modules():
-    from screenmanget import caster, discovery, monitors, spinner, tray  # noqa: F401
+    from screenmagnet import caster, discovery, monitors, spinner, tray  # noqa: F401
 
     return True, "all modules import"
 
 
 def t_binary():
-    from screenmanget.caster import BINARY
+    from screenmagnet.caster import BINARY
 
     return BINARY.exists(), str(BINARY)
 
 
 def t_preflight():
-    from screenmanget.caster import preflight
+    from screenmagnet.caster import preflight
 
     problems = preflight()
     return (not problems), ("; ".join(problems) if problems else "distrobox + doubletake binary present")
 
 
 def t_monitors():
-    from screenmanget.monitors import list_monitors
+    from screenmagnet.monitors import list_monitors
 
     mons = list_monitors()
     if not mons:
@@ -73,14 +73,14 @@ def t_monitors():
 def t_zeroconf():
     import zeroconf
 
-    from screenmanget.discovery import _is_ipv4
+    from screenmagnet.discovery import _is_ipv4
 
     assert _is_ipv4("192.168.1.24") and not _is_ipv4("fe80::1"), "IPv4 filter wrong"
     return True, f"python-zeroconf {zeroconf.__version__}, IPv4 filter ok"
 
 
 def t_discovery():
-    from screenmanget.discovery import discover
+    from screenmagnet.discovery import discover
 
     screens = discover(seconds=4)
     if not screens:
@@ -92,13 +92,13 @@ def t_widgets():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
 
-    from screenmanget.spinner import ChasingArrows
-    from screenmanget.tray import Panel, ScreenMangetTray, app_icon
+    from screenmagnet.spinner import ChasingArrows
+    from screenmagnet.tray import Panel, ScreenMagnetTray, app_icon
 
     app = QApplication.instance() or QApplication([])
     icon = app_icon()
     assert not icon.isNull(), "app icon is null"
-    tray = ScreenMangetTray(app)
+    tray = ScreenMagnetTray(app)
     assert isinstance(tray.panel, Panel)
     spin = ChasingArrows()
     spin.start()
@@ -109,19 +109,20 @@ def t_widgets():
 
 
 def t_doubletake_flags():
-    from screenmanget.caster import CONTAINER
+    from screenmagnet.caster import BINARY, CONTAINER, DOUBLETAKE_DIR, IS_WINDOWS
 
-    out = subprocess.run(
-        ["distrobox", "enter", CONTAINER, "--", "bash", "-lc",
-         "cd ~/.claude/ScreenManget/spike/doubletake && ./bin/doubletake --help 2>&1"],
-        capture_output=True, text=True, timeout=90,
-    ).stdout
-    missing = [f for f in ("-monitor", "-target", "-hwaccel", "-pin") if f not in out]
-    return (not missing), ("missing flags: " + ", ".join(missing) if missing else "-monitor/-target/-hwaccel/-pin present")
+    if IS_WINDOWS:
+        cmd = [str(BINARY), "--help"]
+    else:
+        cmd = ["distrobox", "enter", CONTAINER, "--", "bash", "-lc",
+               f"cd {DOUBLETAKE_DIR} && ./bin/doubletake --help 2>&1"]
+    out = subprocess.run(cmd, capture_output=True, text=True, timeout=90).stdout
+    missing = [f for f in ("-monitor", "-target", "-hwaccel", "-pin", "-playout-floor-ms") if f not in out]
+    return (not missing), ("missing flags: " + ", ".join(missing) if missing else "-monitor/-target/-hwaccel/-pin/-playout-floor-ms present")
 
 
 if __name__ == "__main__":
-    print("ScreenManget smoke test\n")
+    print("ScreenMagnet smoke test\n")
     check("PySide6 available", t_pyside)
     check("app modules import", t_modules)
     check("doubletake binary built", t_binary)

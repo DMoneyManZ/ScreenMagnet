@@ -1,6 +1,6 @@
 # qwen3.5:4b LoRA — watching this project get built
 
-Claude builds ScreenManget. `qwen3.5:4b` watches every step and writes down what happened
+Claude builds ScreenMagnet. `qwen3.5:4b` watches every step and writes down what happened
 and *why*. That record becomes a LoRA adapter for qwen.
 
 ## The loop
@@ -67,8 +67,8 @@ the immutable root.
 ## Setup
 
 ```bash
-python3.13 -m venv ~/.local/share/screenmanget/loravenv
-source ~/.local/share/screenmanget/loravenv/bin/activate
+python3.13 -m venv ~/.local/share/screenmagnet/loravenv
+source ~/.local/share/screenmagnet/loravenv/bin/activate
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install transformers peft datasets accelerate
 ```
@@ -85,7 +85,7 @@ python train_lora.py                  # actually train
 One JSON object per line:
 
 ```json
-{"ts": "...", "project": "ScreenManget", "step": "...", "detail": "...",
+{"ts": "...", "project": "ScreenMagnet", "step": "...", "detail": "...",
  "explanation": "...", "model": "qwen3.5:4b"}
 ```
 

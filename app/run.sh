@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch ScreenManget.
+# Launch ScreenMagnet.
 #
 # The venv lives outside the repo (in ~/.local/share) because SteamOS has a
 # read-only root and system-wide pip is not an option. It must be built with
@@ -7,7 +7,7 @@
 # 3.14 wheels.
 set -euo pipefail
 
-VENV="${SCREENMANGET_VENV:-$HOME/.local/share/screenmanget/venv}"
+VENV="${SCREENMANGET_VENV:-$HOME/.local/share/screenmagnet/venv}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ ! -x "$VENV/bin/python" ]; then
@@ -24,10 +24,10 @@ if ! "$VENV/bin/python" -c "import PySide6" 2>/dev/null; then
 fi
 
 # Only one tray instance is useful.
-if pgrep -f "screenmanget(\.__main__)?$" >/dev/null 2>&1; then
-    echo "ScreenManget already running." >&2
+if pgrep -f "screenmagnet(\.__main__)?$" >/dev/null 2>&1; then
+    echo "ScreenMagnet already running." >&2
     exit 0
 fi
 
 cd "$HERE"
-exec "$VENV/bin/python" -m screenmanget "$@"
+exec "$VENV/bin/python" -m screenmagnet "$@"

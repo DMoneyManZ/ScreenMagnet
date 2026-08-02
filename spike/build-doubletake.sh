@@ -10,9 +10,9 @@
 
 set -uo pipefail
 
-BOX=screenmanget
+BOX=screenmagnet
 IMAGE=quay.io/toolbx/arch-toolbox:latest
-SRC="$HOME/.claude/ScreenManget/spike/doubletake"
+SRC="$HOME/.claude/ScreenMagnet/spike/doubletake"
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 

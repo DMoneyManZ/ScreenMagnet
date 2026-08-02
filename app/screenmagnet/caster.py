@@ -1,14 +1,17 @@
 """Drive doubletake (the AirPlay sender) and report what it's doing.
 
-doubletake runs inside a distrobox container because the SteamOS host has no H.264
-GStreamer encoder at all and its root filesystem is read-only. The container has
-x264enc + openh264enc.
+Platform differences are confined to this module.
+
+On Linux the sender runs inside a distrobox container, because SteamOS has no
+H.264 GStreamer encoder at all and a read-only root filesystem. On Windows it
+runs directly: GStreamer for Windows ships x264enc and openh264enc plus the
+hardware encoders, so there is nothing to containerise.
 
 Encoder selection is left on `auto`. It used to have to be forced to `none`
 because doubletake picked an encoder whenever its element factory was merely
-registered -- selecting NVENC on this AMD machine, where the pipeline died on
-the first frame. It now probes by encoding two real frames, so `auto` degrades
-to software correctly here and will find hardware on machines that have it.
+registered -- selecting NVENC on an AMD machine, where the pipeline died on the
+first frame. It now probes by encoding two real frames, so `auto` degrades to
+software correctly and finds hardware on machines that have it.
 """
 
 from __future__ import annotations
@@ -18,13 +21,22 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, Signal
 
-CONTAINER = "screenmanget"
-DOUBLETAKE_DIR = Path.home() / ".claude/ScreenManget/spike/doubletake"
-BINARY = DOUBLETAKE_DIR / "bin/doubletake"
+IS_WINDOWS = sys.platform.startswith("win")
+
+CONTAINER = "screenmagnet"
+
+# Where the sender lives. Override with SCREENMAGNET_DOUBLETAKE -- on Windows
+# there is no conventional location for it.
+DOUBLETAKE_DIR = Path(
+    os.environ.get("SCREENMAGNET_DOUBLETAKE")
+    or (Path.home() / ".claude/ScreenMagnet/spike/doubletake")
+)
+BINARY = DOUBLETAKE_DIR / "bin" / ("doubletake.exe" if IS_WINDOWS else "doubletake")
 
 # Log lines we translate into UI state.
 _READY = re.compile(r"screen capture started")
@@ -40,11 +52,27 @@ class CastError(Exception):
 def preflight() -> list[str]:
     """Return a list of problems that would stop a cast, empty if we're good."""
     problems = []
-    if not shutil.which("distrobox"):
-        problems.append("distrobox is not installed")
     if not BINARY.exists():
         problems.append(f"doubletake binary missing at {BINARY}")
+    if IS_WINDOWS:
+        if not shutil.which("gst-launch-1.0.exe"):
+            problems.append(
+                "gst-launch-1.0.exe not on PATH — install GStreamer for Windows "
+                "(runtime, with the 'bad' and 'ugly' plugin sets)"
+            )
+    else:
+        if not shutil.which("distrobox"):
+            problems.append("distrobox is not installed")
     return problems
+
+
+def _sender_argv(args: list[str]) -> tuple[str, list[str]]:
+    """Build the (program, argv) pair that runs doubletake on this platform."""
+    if IS_WINDOWS:
+        return str(BINARY), args
+    inner = ["cd", str(DOUBLETAKE_DIR), "&&", "DISPLAY=:0", "exec", "./bin/doubletake"]
+    inner += args
+    return "distrobox", ["enter", CONTAINER, "--", "bash", "-lc", " ".join(inner)]
 
 
 class Caster(QObject):
@@ -86,35 +114,34 @@ class Caster(QObject):
         self._target = ip
         self._reported_fatal = False
 
-        inner = [
-            f"cd {DOUBLETAKE_DIR}",
-            "&&",
-            "DISPLAY=:0",
-            "exec",
-            "./bin/doubletake",
+        args = [
             "-target", ip,
-            "-hwaccel", "auto",          # probes encoders for real; falls back to x264enc
+            "-hwaccel", "auto",
             "-fps", str(fps),
             "-target-latency-ms", "80",
         ]
         if low_latency:
             # doubletake imposes a 500ms playout floor on receivers without
-            # FairPlay SAP (this LG is one) as an audio jitter margin, and video
-            # inherits it to stay in sync. Measured on the LG 43UK6090PUA:
-            # dropping it takes end-to-end latency 1.4s -> 1.0s, at the cost of
-            # audio running ~0.4s behind and possibly dropping. Worth it for a
-            # desktop mirror; turn off for anything where the sound matters.
-            inner += ["-playout-floor-ms", "0"]
+            # FairPlay SAP as an audio jitter margin, and video inherits it to
+            # stay in sync. Measured on an LG 43UK6090PUA: dropping it takes
+            # end-to-end latency 1.4s -> 1.0s, at the cost of audio running
+            # ~0.4s behind and possibly dropping. Worth it for a desktop
+            # mirror; turn it off for anything where the sound matters.
+            args += ["-playout-floor-ms", "0"]
         if monitor:
-            inner += ["-monitor", monitor]
+            args += ["-monitor", monitor]
         if pin:
-            inner += ["-pin", pin, "-pair"]
+            args += ["-pin", pin, "-pair"]
+
+        program, argv = _sender_argv(args)
 
         self._proc = QProcess(self)
         self._proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        if IS_WINDOWS:
+            self._proc.setWorkingDirectory(str(DOUBLETAKE_DIR))
         self._proc.readyReadStandardOutput.connect(self._on_output)
         self._proc.finished.connect(self._on_finished)
-        self._proc.start("distrobox", ["enter", CONTAINER, "--", "bash", "-lc", " ".join(inner)])
+        self._proc.start(program, argv)
 
     def stop(self):
         if not self._proc:
@@ -123,11 +150,14 @@ class Caster(QObject):
         proc.terminate()
         if not proc.waitForFinished(4000):
             proc.kill()
-        # distrobox enter wraps the real process; make sure the inner one is gone.
         self._reap_orphans()
         self.stopped.emit()
 
     def _reap_orphans(self):
+        """`distrobox enter` wraps the real process, so terminating the wrapper can
+        leave the sender running. Windows launches it directly and needs none of this."""
+        if IS_WINDOWS:
+            return
         try:
             out = subprocess.run(["ps", "-eo", "pid,cmd"], capture_output=True, text=True).stdout
             for line in out.splitlines():

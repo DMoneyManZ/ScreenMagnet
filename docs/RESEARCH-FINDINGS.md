@@ -1,4 +1,4 @@
-# ScreenManget — Research Findings (2026-08-01)
+# ScreenMagnet — Research Findings (2026-08-01)
 
 Two research agents (protocol + app-shell) plus on-box verification. Everything below
 is measured on the Legion, not assumed.

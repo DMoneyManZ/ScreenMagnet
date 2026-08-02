@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ScreenManget development observer.
+ScreenMagnet development observer.
 
 Feeds each development step to the local qwen3.5:4b model, asks it to explain
 what happened in its own words, and appends the pair to a JSONL corpus.
@@ -26,7 +26,7 @@ CORPUS = Path(__file__).parent / "corpus.jsonl"
 
 SYSTEM = """You are observing a real software project being built, step by step.
 
-The project is ScreenManget: a KDE Plasma system-tray app for a SteamOS machine
+The project is ScreenMagnet: a KDE Plasma system-tray app for a SteamOS machine
 that mirrors the desktop to a TV (Samsung/LG via Miracast, Apple TV via AirPlay).
 Linux has no built-in screen-mirroring sender, which is the gap this app fills.
 
@@ -63,7 +63,7 @@ def record(step: str, detail: str) -> str:
     with CORPUS.open("a") as f:
         f.write(json.dumps({
             "ts": datetime.now(timezone.utc).isoformat(),
-            "project": "ScreenManget",
+            "project": "ScreenMagnet",
             "step": step,
             "detail": detail,
             "explanation": explanation,

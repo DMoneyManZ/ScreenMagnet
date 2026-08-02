@@ -168,7 +168,10 @@ without containerisation.
 
 ## 10. HARD CONSTRAINT (user directive, 2026-08-01)
 
-**ONLY stream to 192.168.1.175 — "LG webOS duncan's donut TV" (LG 43UK6090PUA).**
+**ONLY stream to the LG 43UK6090PUA, mDNS name "LG webOS duncan's donut TV".**
+Resolve it by name, never by address — it was 192.168.1.175 on Wi-Fi and moved to
+192.168.1.24 when it was wired, because the Ethernet NIC has a different MAC and so gets a
+different DHCP lease.
 Never target .152 / .153 / .5 / .89 / .188. Other TVs are in other rooms and in use.
 Discovery may list them; streaming must be hard-scoped to .175.
 

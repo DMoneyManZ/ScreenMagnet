@@ -13,13 +13,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ ! -x "$VENV/bin/python" ]; then
     echo "venv missing at $VENV" >&2
     echo "create it with:" >&2
-    echo "  python3.13 -m venv $VENV && $VENV/bin/pip install PySide6" >&2
+    echo "  python3.13 -m venv $VENV && $VENV/bin/pip install PySide6 zeroconf" >&2
     exit 1
 fi
 
 if ! "$VENV/bin/python" -c "import PySide6" 2>/dev/null; then
     echo "PySide6 not installed in $VENV" >&2
-    echo "  $VENV/bin/pip install PySide6" >&2
+    echo "  $VENV/bin/pip install PySide6 zeroconf" >&2
     exit 1
 fi
 

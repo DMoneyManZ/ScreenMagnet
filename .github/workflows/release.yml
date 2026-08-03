@@ -1,0 +1,101 @@
+name: Build release installers
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6==6.11.1 zeroconf==0.150.0 pyinstaller
+
+      - name: Freeze the app with PyInstaller
+        shell: pwsh
+        run: |
+          pyinstaller `
+            --name ScreenMagnet `
+            --windowed --onedir --noconfirm `
+            --icon "app/assets/screenmagnet.ico" `
+            --add-data "app/assets;assets" `
+            --paths "app" `
+            --distpath "packaging/windows/dist" `
+            --workpath "packaging/windows/build" `
+            --specpath "packaging/windows" `
+            packaging/pyinstaller_entry.py
+
+      - name: Download GStreamer runtime + VC++ redistributable
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path packaging/windows/prereqs | Out-Null
+          Invoke-WebRequest -UseBasicParsing -Uri "https://gstreamer.freedesktop.org/data/pkg/windows/1.28.5/msvc/gstreamer-1.0-msvc-x86_64-1.28.5.exe" -OutFile "packaging/windows/prereqs/gstreamer-1.0-msvc-x86_64-1.28.5.exe"
+          Invoke-WebRequest -UseBasicParsing -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "packaging/windows/prereqs/vc_redist.x64.exe"
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\windows\installer.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ScreenMagnet-Setup-windows
+          path: packaging/windows/output/ScreenMagnet-Setup.exe
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build doubletake (pure Go, no cgo -- distrobox is a runtime-only fallback)
+        run: |
+          git clone https://github.com/omarroth/doubletake /tmp/doubletake
+          cd /tmp/doubletake
+          git checkout 8ccea5f
+          git apply "$GITHUB_WORKSPACE/patches/0001-screenmagnet-fixes.patch"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/doubletake-linux ./cmd/doubletake
+
+      - name: Build the AppImage
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libfuse2
+          bash packaging/linux/build-appimage.sh /tmp/doubletake-linux
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ScreenMagnet-x86_64-AppImage
+          path: packaging/linux/dist/ScreenMagnet-x86_64.AppImage
+
+  release:
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/ScreenMagnet-Setup-windows/ScreenMagnet-Setup.exe
+            artifacts/ScreenMagnet-x86_64-AppImage/ScreenMagnet-x86_64.AppImage

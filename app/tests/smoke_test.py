@@ -58,7 +58,7 @@ def t_preflight():
     from screenmagnet.caster import preflight
 
     problems = preflight()
-    return (not problems), ("; ".join(problems) if problems else "distrobox + doubletake binary present")
+    return (not problems), ("; ".join(problems) if problems else "encoder + doubletake binary present")
 
 
 def t_monitors():
@@ -75,7 +75,7 @@ def t_zeroconf():
 
     from screenmagnet.discovery import _is_ipv4
 
-    assert _is_ipv4("192.168.1.24") and not _is_ipv4("fe80::1"), "IPv4 filter wrong"
+    assert _is_ipv4("192.0.2.24") and not _is_ipv4("fe80::1"), "IPv4 filter wrong"
     return True, f"python-zeroconf {zeroconf.__version__}, IPv4 filter ok"
 
 
@@ -109,14 +109,16 @@ def t_widgets():
 
 
 def t_doubletake_flags():
-    from screenmagnet.caster import BINARY, CONTAINER, DOUBLETAKE_DIR, IS_WINDOWS
+    from screenmagnet.caster import BINARY, CONTAINER, DOUBLETAKE_DIR, _runs_natively
 
-    if IS_WINDOWS:
+    if _runs_natively():
         cmd = [str(BINARY), "--help"]
     else:
         cmd = ["distrobox", "enter", CONTAINER, "--", "bash", "-lc",
                f"cd {DOUBLETAKE_DIR} && ./bin/doubletake --help 2>&1"]
-    out = subprocess.run(cmd, capture_output=True, text=True, timeout=90).stdout
+    # Go's flag package prints usage to stderr, not stdout.
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    out = result.stdout + result.stderr
     missing = [f for f in ("-monitor", "-target", "-hwaccel", "-pin", "-playout-floor-ms") if f not in out]
     return (not missing), ("missing flags: " + ", ".join(missing) if missing else "-monitor/-target/-hwaccel/-pin/-playout-floor-ms present")
 
@@ -126,7 +128,7 @@ if __name__ == "__main__":
     check("PySide6 available", t_pyside)
     check("app modules import", t_modules)
     check("doubletake binary built", t_binary)
-    check("preflight (distrobox/binary)", t_preflight)
+    check("preflight (encoder/binary/distrobox)", t_preflight)
     check("monitor enumeration", t_monitors)
     check("zeroconf + IPv4 filter", t_zeroconf)
     check("doubletake CLI flags", t_doubletake_flags)

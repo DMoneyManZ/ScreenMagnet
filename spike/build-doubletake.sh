@@ -6,13 +6,14 @@
 # so we cannot install them on the host. doubletake uses host GStreamer, so it gets
 # a container that has one. /dev/dri is shared by distrobox for VAAPI hw encode.
 #
-# TARGET IS HARD-SCOPED to the LG at 192.168.1.175 - see docs/RESEARCH-FINDINGS.md §10.
+# During development, streaming was hard-scoped to one TV - see docs/RESEARCH-FINDINGS.md §10.
 
 set -uo pipefail
 
 BOX=screenmagnet
 IMAGE=quay.io/toolbx/arch-toolbox:latest
-SRC="$HOME/.claude/ScreenMagnet/spike/doubletake"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC="$HERE/doubletake"
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 

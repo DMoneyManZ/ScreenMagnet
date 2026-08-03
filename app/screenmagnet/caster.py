@@ -2,10 +2,14 @@
 
 Platform differences are confined to this module.
 
-On Linux the sender runs inside a distrobox container, because SteamOS has no
-H.264 GStreamer encoder at all and a read-only root filesystem. On Windows it
-runs directly: GStreamer for Windows ships x264enc and openh264enc plus the
-hardware encoders, so there is nothing to containerise.
+On Windows it runs directly: GStreamer for Windows ships x264enc and
+openh264enc plus the hardware encoders, so there is nothing to containerise.
+
+On Linux it also runs directly *if* the host has a usable H.264 encoder.
+Most desktop distros do once GStreamer's "good/bad/ugly" plugin sets are
+installed. When none is found (SteamOS: no H.264 encoder at all, and a
+read-only root filesystem that blocks installing one) it falls back to
+running inside a distrobox container that has the encoders instead.
 
 Encoder selection is left on `auto`. It used to have to be forced to `none`
 because doubletake picked an encoder whenever its element factory was merely
@@ -16,6 +20,7 @@ software correctly and finds hardware on machines that have it.
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import shutil
@@ -28,15 +33,17 @@ from PySide6.QtCore import QObject, QProcess, Signal
 
 IS_WINDOWS = sys.platform.startswith("win")
 
-CONTAINER = "screenmagnet"
+CONTAINER = os.environ.get("SCREENMAGNET_CONTAINER", "screenmagnet")
 
-# Where the sender lives. Override with SCREENMAGNET_DOUBLETAKE -- on Windows
-# there is no conventional location for it.
+# Where the sender lives. Override with SCREENMAGNET_DOUBLETAKE -- there is no
+# conventional location for it once this is packaged/installed.
 DOUBLETAKE_DIR = Path(
     os.environ.get("SCREENMAGNET_DOUBLETAKE")
-    or (Path.home() / ".claude/ScreenMagnet/spike/doubletake")
+    or (Path.home() / ".local/share/screenmagnet/doubletake")
 )
 BINARY = DOUBLETAKE_DIR / "bin" / ("doubletake.exe" if IS_WINDOWS else "doubletake")
+
+_H264_ENCODERS = ("x264enc", "openh264enc", "vah264enc", "vaapih264enc")
 
 # Log lines we translate into UI state.
 _READY = re.compile(r"screen capture started")
@@ -47,6 +54,32 @@ _FATAL = re.compile(r"connect failed|no route to host|streaming error|pairing fa
 
 class CastError(Exception):
     pass
+
+
+@functools.lru_cache(maxsize=1)
+def _has_native_encoder() -> bool:
+    """True if a usable H.264 GStreamer encoder is registered on this host.
+
+    Cached: this shells out to gst-inspect-1.0 once per process, not once per
+    cast. Irrelevant on Windows, where GStreamer for Windows always ships one.
+    """
+    gst_inspect = shutil.which("gst-inspect-1.0") or shutil.which("gst-inspect-1.0.exe")
+    if not gst_inspect:
+        return False
+    for name in _H264_ENCODERS:
+        try:
+            if subprocess.run(
+                [gst_inspect, name], capture_output=True, timeout=5
+            ).returncode == 0:
+                return True
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    return False
+
+
+def _runs_natively() -> bool:
+    """True if doubletake should be launched directly, false if it needs distrobox."""
+    return IS_WINDOWS or _has_native_encoder()
 
 
 def preflight() -> list[str]:
@@ -60,15 +93,22 @@ def preflight() -> list[str]:
                 "gst-launch-1.0.exe not on PATH — install GStreamer for Windows "
                 "(runtime, with the 'bad' and 'ugly' plugin sets)"
             )
+    elif _has_native_encoder():
+        if not shutil.which("gst-launch-1.0"):
+            problems.append("gst-launch-1.0 not on PATH")
     else:
         if not shutil.which("distrobox"):
-            problems.append("distrobox is not installed")
+            problems.append(
+                "no H.264 encoder found and distrobox is not installed — "
+                "either install GStreamer's 'bad'/'ugly' plugins, or install "
+                "distrobox so the bundled container fallback can be used"
+            )
     return problems
 
 
 def _sender_argv(args: list[str]) -> tuple[str, list[str]]:
     """Build the (program, argv) pair that runs doubletake on this platform."""
-    if IS_WINDOWS:
+    if _runs_natively():
         return str(BINARY), args
     inner = ["cd", str(DOUBLETAKE_DIR), "&&", "DISPLAY=:0", "exec", "./bin/doubletake"]
     inner += args
@@ -137,7 +177,7 @@ class Caster(QObject):
 
         self._proc = QProcess(self)
         self._proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        if IS_WINDOWS:
+        if _runs_natively():
             self._proc.setWorkingDirectory(str(DOUBLETAKE_DIR))
         self._proc.readyReadStandardOutput.connect(self._on_output)
         self._proc.finished.connect(self._on_finished)
@@ -155,8 +195,8 @@ class Caster(QObject):
 
     def _reap_orphans(self):
         """`distrobox enter` wraps the real process, so terminating the wrapper can
-        leave the sender running. Windows launches it directly and needs none of this."""
-        if IS_WINDOWS:
+        leave the sender running. Anything launched directly needs none of this."""
+        if _runs_natively():
             return
         try:
             out = subprocess.run(["ps", "-eo", "pid,cmd"], capture_output=True, text=True).stdout

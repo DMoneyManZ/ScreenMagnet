@@ -36,15 +36,17 @@ Revisit only if SteamOS ships kernel ≥ 6.14.
 `avahi-daemon` is **inactive**, which is why the first sweep found nothing. Querying
 sockets directly:
 
-| IP | Device | AirPlay | **MICE** (`_display._tcp`) | DLNA |
+Addresses below use the RFC 5737 documentation range in place of the real ones.
+
+| Host | Device | AirPlay | **MICE** (`_display._tcp`) | DLNA |
 |---|---|---|---|---|
-| 192.168.1.152 | **43" TCL Roku TV** | ✅ | **✅** | ✅ |
-| 192.168.1.153 | **65" Element Roku TV** | ✅ | **✅** | ✅ |
-| 192.168.1.89 | Samsung 7 Series (58") | ✅ | — | ✅ |
-| 192.168.1.188 | LG WebOS TV (~2018) | — | — | ✅ |
-| 192.168.1.5 | Roku Express BR | ✅ | — | ✅ |
-| 192.168.1.167 | Denon AVR-X3500H | ✅ (audio) | — | ✅ |
-| 192.168.1.208 / .34 | m1imac / MacBook Pro | ✅ | — | — |
+| 192.0.2.10 | **43" TCL Roku TV** | ✅ | **✅** | ✅ |
+| 192.0.2.11 | **65" Element Roku TV** | ✅ | **✅** | ✅ |
+| 192.0.2.12 | Samsung 7 Series (58") | ✅ | — | ✅ |
+| 192.0.2.13 | LG WebOS TV (~2018) | — | — | ✅ |
+| 192.0.2.14 | Roku Express | ✅ | — | ✅ |
+| 192.0.2.15 | Denon AVR-X3500H | ✅ (audio) | — | ✅ |
+| 192.0.2.16 / .17 | iMac / MacBook Pro | ✅ | — | — |
 
 - **`_googlecast._tcp`: zero responders.** No Chromecast exists here — the entire Google
   Cast path is academic.
@@ -162,21 +164,23 @@ without containerisation.
    `G_MESSAGES_DEBUG=all` and confirm a sink appears **and a picture actually lands**.
    **This single test decides the architecture.**
 4. In parallel: build `doubletake` in a distrobox, point it at the Samsung
-   (192.168.1.89) and the Apple TV once awake.
+   (the Samsung, 192.0.2.12) and the Apple TV once awake.
 
 ---
 
 ## 10. HARD CONSTRAINT (user directive, 2026-08-01)
 
-**ONLY stream to the LG 43UK6090PUA, mDNS name "LG webOS duncan's donut TV".**
-Resolve it by name, never by address — it was 192.168.1.175 on Wi-Fi and moved to
-192.168.1.24 when it was wired, because the Ethernet NIC has a different MAC and so gets a
-different DHCP lease.
-Never target .152 / .153 / .5 / .89 / .188. Other TVs are in other rooms and in use.
-Discovery may list them; streaming must be hard-scoped to .175.
+**ONLY stream to the development LG 43UK6090PUA**, identified by its mDNS instance name.
+Resolve it by name, never by address — it was 192.0.2.20 on Wi-Fi and moved to 192.0.2.21
+when it was wired, because the Ethernet NIC has a different MAC and so gets a different
+DHCP lease. This is why discovery resolves targets by mDNS name rather than caching an
+address.
+
+Never target the other receivers on the LAN: they are in other rooms and in use.
+Discovery may list them; streaming during development was hard-scoped to the one TV.
 
 ### Why the LG is AirPlay-only (tested, not assumed)
-With **Screen Share open on the TV**, .175 still advertised NO `_display._tcp` and kept
+With **Screen Share open on the TV**, it still advertised NO `_display._tcp` and kept
 7236/7250 **closed**. LG's Screen Share is **Wi-Fi Direct Miracast**, which kernel 6.11's
 mt76 driver cannot do (no `P2P_DEVICE`). GND/MICE is therefore a dead end for this TV.
 

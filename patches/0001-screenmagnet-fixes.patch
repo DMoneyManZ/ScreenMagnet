@@ -47,6 +47,34 @@ index 6dd928c..62db028 100644
  			ShowCursor:    !*noCursor,
  			RestoreToken:  restoreToken,
  			SaveRestoreToken: func(token string) error {
+diff --git a/internal/airplay/audio.go b/internal/airplay/audio.go
+index 1586b03..f042dbd 100644
+--- a/internal/airplay/audio.go
++++ b/internal/airplay/audio.go
+@@ -97,6 +97,14 @@ func StartAudioCapture(ctx context.Context, testTone bool) (*AudioCapture, error
+ 		srcArgs = []string{"audiotestsrc", "wave=sine", "freq=440", "is-live=true",
+ 			"samplesperbuffer=352"}
+ 		dbg("[AUDIO] using test tone (440 Hz sine wave, live, spf=352)")
++	} else if exec.Command("gst-inspect-1.0", "wasapi2src").Run() == nil {
++		// WASAPI2 loopback: captures the system's audio output (whatever is
++		// playing), the Windows equivalent of a PulseAudio monitor source.
++		srcArgs = []string{"wasapi2src", "loopback=true", "low-latency=true"}
++		dbg("[AUDIO] using wasapi2src loopback=true")
++	} else if exec.Command("gst-inspect-1.0", "wasapisrc").Run() == nil {
++		srcArgs = []string{"wasapisrc", "loopback=true"}
++		dbg("[AUDIO] using wasapisrc loopback=true")
+ 	} else if exec.Command("gst-inspect-1.0", "pulsesrc").Run() == nil {
+ 		monitor := detectPulseMonitor()
+ 		if monitor == "" {
+@@ -110,7 +118,7 @@ func StartAudioCapture(ctx context.Context, testTone bool) (*AudioCapture, error
+ 		dbg("[AUDIO] using pipewiresrc")
+ 	} else {
+ 		cancel()
+-		return nil, fmt.Errorf("no audio source available (need pulsesrc or pipewiresrc)")
++		return nil, fmt.Errorf("no audio source available (need wasapi2src/wasapisrc on Windows, or pulsesrc/pipewiresrc on Linux)")
+ 	}
+ 
+ 	ac := &AudioCapture{
 diff --git a/internal/airplay/capture.go b/internal/airplay/capture.go
 index e9646ae..42033b6 100644
 --- a/internal/airplay/capture.go
@@ -353,6 +381,43 @@ index e9646ae..42033b6 100644
  // vbvBufferKbit returns the x264 VBV buffer size in kbit for the given bitrate
  // and FPS. Sized at ~2 frames of data — enough headroom for the encoder to
  // handle scene changes without severe quality oscillation, but tight enough to
+diff --git a/internal/airplay/capture_unix.go b/internal/airplay/capture_unix.go
+new file mode 100644
+index 0000000..683b4c3
+--- /dev/null
++++ b/internal/airplay/capture_unix.go
+@@ -0,0 +1,31 @@
++//go:build !windows
++
++package airplay
++
++import (
++	"context"
++	"fmt"
++	"os"
++)
++
++// gstBinary is the gst-launch-1.0 executable name to invoke. No .exe suffix
++// on Unix -- see gstBinaryInspect in capture.go.
++const gstBinary = "gst-launch-1.0"
++
++// startPlatformCapture detects the display server (Wayland or X11) and
++// initiates screen capture accordingly. On Wayland it uses xdg-desktop-portal
++// + PipeWire; on X11 it uses ximagesrc. This is the pre-Windows-support
++// dispatch logic, unchanged, moved into its own file so a Windows build can
++// supply its own startPlatformCapture/gstBinary instead. See capture.go.
++func startPlatformCapture(ctx context.Context, cfg CaptureConfig) (*ScreenCapture, error) {
++	if (cfg.X11WindowID != 0 || cfg.X11WindowName != "") && os.Getenv("DISPLAY") != "" {
++		return startX11Capture(ctx, cfg)
++	}
++	if os.Getenv("WAYLAND_DISPLAY") != "" {
++		return startWaylandCapture(ctx, cfg)
++	}
++	if os.Getenv("DISPLAY") != "" {
++		return startX11Capture(ctx, cfg)
++	}
++	return nil, fmt.Errorf("no display server detected (neither WAYLAND_DISPLAY nor DISPLAY is set)")
++}
 diff --git a/internal/airplay/discovery.go b/internal/airplay/discovery.go
 index 7f0c446..d6e6ac9 100644
 --- a/internal/airplay/discovery.go

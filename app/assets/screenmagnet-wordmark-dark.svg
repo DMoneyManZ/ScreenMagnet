@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 160" width="600" height="160">
+  <title>ScreenMagnet</title>
+  <!-- for dark (GitHub dark-mode gray, ~#0D1117) README backgrounds -->
+  <!-- icon chip -->
+  <rect x="20" y="30" width="100" height="100" rx="22" fill="#38BDF8"/>
+  <g transform="translate(20,30) scale(1.5625)">
+    <rect x="6" y="14" width="52" height="36" rx="7" fill="none" stroke="#0F172A" stroke-width="5"/>
+    <path d="M13 35A8 8 0 0 1 21 43" fill="none" stroke="#0F172A" stroke-width="5" stroke-linecap="round"/>
+    <path d="M13 28A15 15 0 0 1 28 43" fill="none" stroke="#0F172A" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="13" cy="43" r="3.2" fill="#0F172A"/>
+  </g>
+  <!-- wordmark -->
+  <text x="148" y="103" font-family="'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="60" font-weight="700">
+    <tspan fill="#F1F5F9">Screen</tspan><tspan fill="#38BDF8">Magnet</tspan>
+  </text>
+</svg>

@@ -153,10 +153,16 @@ class Panel(QWidget):
         # --- results --------------------------------------------------------
         # Scrolled: this LAN routinely turns up 8+ AirPlay receivers, and an
         # unbounded list grows the popup straight off the bottom of the screen.
+        # Sized for ~4 rows (ScreenRow.setMinimumHeight(48) + 2px spacing each)
+        # so the panel reliably shows several screens at once instead of
+        # shrinking down to whatever was found, with room to scroll for more.
+        ROW_H, ROW_SPACING, VISIBLE_ROWS = 48, 2, 4
+        rows_height = ROW_H * VISIBLE_ROWS + ROW_SPACING * (VISIBLE_ROWS - 1)
+
         self.results = QWidget()
         self.results_layout = QVBoxLayout(self.results)
         self.results_layout.setContentsMargins(0, 0, 0, 0)
-        self.results_layout.setSpacing(2)
+        self.results_layout.setSpacing(ROW_SPACING)
 
         self.results_scroll = QScrollArea()
         self.results_scroll.setWidget(self.results)
@@ -165,7 +171,8 @@ class Panel(QWidget):
         self.results_scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
-        self.results_scroll.setMaximumHeight(300)
+        self.results_scroll.setMinimumHeight(rows_height)
+        self.results_scroll.setMaximumHeight(rows_height + ROW_H // 2)
         root.addWidget(self.results_scroll)
 
         # --- PIN entry ------------------------------------------------------

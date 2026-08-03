@@ -22,17 +22,20 @@ jobs:
 
       - name: Freeze the app with PyInstaller
         shell: pwsh
+        # --icon/--add-data are resolved relative to --specpath, not the working
+        # directory, so these must be absolute or the build fails looking for
+        # packaging/windows/app/assets.
         run: |
           pyinstaller `
             --name ScreenMagnet `
             --windowed --onedir --noconfirm `
-            --icon "app/assets/screenmagnet.ico" `
-            --add-data "app/assets;assets" `
-            --paths "app" `
+            --icon "$env:GITHUB_WORKSPACE\app\assets\screenmagnet.ico" `
+            --add-data "$env:GITHUB_WORKSPACE\app\assets;assets" `
+            --paths "$env:GITHUB_WORKSPACE\app" `
             --distpath "packaging/windows/dist" `
             --workpath "packaging/windows/build" `
             --specpath "packaging/windows" `
-            packaging/pyinstaller_entry.py
+            "$env:GITHUB_WORKSPACE\packaging\pyinstaller_entry.py"
 
       - name: Download GStreamer runtime + VC++ redistributable
         shell: pwsh

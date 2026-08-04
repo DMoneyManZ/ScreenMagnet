@@ -1,17 +1,27 @@
 #!/usr/bin/env python3
-"""
-Train a LoRA adapter for qwen3.5:4b on the ScreenMagnet development corpus.
+r"""
+Train a LoRA adapter for the local Qwen3-4B-Instruct-2507 quant
+(Ollama tag goekdenizguelmez/JOSIEFIED-Qwen3:4b-instruct-2507-q4_k_m) on the
+ScreenMagnet development corpus.
 
 This is the step Ollama cannot do. Run it in a python3.13 venv -- torch has no
-3.14 wheels, and 3.14 is this box's default python. See README.md.
+3.14 wheels, and 3.14 may be this box's default python. See README.md.
 
+Linux/SteamOS (bash, CPU-only -- AMD gfx1103 has no ROCm training path here):
     python3.13 -m venv ~/.local/share/screenmagnet/loravenv
     source ~/.local/share/screenmagnet/loravenv/bin/activate
     pip install torch --index-url https://download.pytorch.org/whl/cpu
     pip install transformers peft datasets accelerate
 
+Windows (this box -- NVIDIA RTX 4060 Laptop 8GB, python3.13.14 via "py -3.13",
+GPU path uses 4-bit QLoRA so it fits in 8GB):
+    py -3.13 -m venv %LOCALAPPDATA%\screenmagnet\loravenv
+    %LOCALAPPDATA%\screenmagnet\loravenv\Scripts\activate
+    pip install torch --index-url https://download.pytorch.org/whl/cu126
+    pip install transformers peft datasets accelerate bitsandbytes
+
     ./train_lora.py --check      # env + corpus sanity, trains nothing
-    ./train_lora.py              # train
+    ./train_lora.py              # train (auto: CUDA 4-bit QLoRA if available, else CPU)
 """
 
 import argparse
@@ -23,9 +33,17 @@ HERE = Path(__file__).parent
 CORPUS = HERE / "corpus.jsonl"
 OUTDIR = HERE / "adapter"
 
-# HF repo for the base weights. The Ollama tag `qwen3.5:4b` is a GGUF quant; LoRA
-# training needs the safetensors base. Override with --base if the repo name differs.
-BASE_MODEL = "Qwen/Qwen3.5-4B"
+# HF repo for the base weights. Verified to exist at
+# https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507 -- config.json architectures =
+# ["Qwen3ForCausalLM"], model_type "qwen3", 36 layers, GQA (32 query / 8 KV heads).
+# The Ollama tag actually pulled on this box (see OLLAMA_MODEL_TAG below) is a GGUF
+# quant of this same base; LoRA training needs the original safetensors weights, not
+# the GGUF. Override with --base if the repo name differs.
+BASE_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
+
+# Local Ollama tag this adapter is eventually served under (see train()'s closing
+# instructions). Not used for training -- just documentation/output.
+OLLAMA_MODEL_TAG = "goekdenizguelmez/JOSIEFIED-Qwen3:4b-instruct-2507-q4_k_m"
 
 PROMPT = (
     "You are observing the ScreenMagnet project being built.\n\n"
@@ -66,16 +84,25 @@ def check():
         print(f"total chars: {chars:,}  (~{chars // 4:,} tokens)")
     print(f"python:  {sys.version.split()[0]}")
     if sys.version_info[:2] >= (3, 14):
-        print("  !! torch has no wheels for 3.14 -- use python3.13")
-    for mod in ("torch", "transformers", "peft", "datasets"):
+        print("  !! torch has no wheels for 3.14 -- use python3.13 (py -3.13 on Windows)")
+    for mod in ("torch", "transformers", "peft", "datasets", "accelerate", "bitsandbytes"):
         try:
             m = __import__(mod)
             extra = ""
             if mod == "torch":
-                extra = f"  (cuda={m.cuda.is_available()})"
+                cuda_ok = m.cuda.is_available()
+                extra = f"  (cuda={cuda_ok}"
+                if cuda_ok:
+                    extra += f", device={m.cuda.get_device_name(0)}"
+                    props = m.cuda.get_device_properties(0)
+                    extra += f", vram={props.total_memory / 2**30:.1f}GB"
+                else:
+                    extra += " -- will fall back to CPU (slow)"
+                extra += ")"
             print(f"  {mod:14s} {getattr(m, '__version__', '?')}{extra}")
         except ImportError:
-            print(f"  {mod:14s} NOT INSTALLED")
+            note = "  (needed for 4-bit QLoRA on GPU)" if mod == "bitsandbytes" else ""
+            print(f"  {mod:14s} NOT INSTALLED{note}")
     if len(rows) < 20:
         print("\nNOTE: fewer than 20 examples. Keep building -- the corpus grows per step.")
 
@@ -83,10 +110,10 @@ def check():
 def train(base, epochs, rank, lr, max_len):
     import torch
     from datasets import Dataset
-    from peft import LoraConfig, get_peft_model
+    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     from transformers import (AutoModelForCausalLM, AutoTokenizer,
-                              DataCollatorForLanguageModeling, Trainer,
-                              TrainingArguments)
+                              BitsAndBytesConfig, DataCollatorForLanguageModeling,
+                              Trainer, TrainingArguments)
 
     rows = load_corpus()
     if not rows:
@@ -103,11 +130,32 @@ def train(base, epochs, rank, lr, max_len):
 
     ds = Dataset.from_list(rows).map(encode, remove_columns=["prompt", "completion"])
 
-    model = AutoModelForCausalLM.from_pretrained(
-        base, torch_dtype=torch.float32, device_map=None,
-    )
-    model.gradient_checkpointing_enable()
-    model.enable_input_require_grads()
+    use_cuda = torch.cuda.is_available()
+    if use_cuda:
+        # QLoRA: base weights in 4-bit NF4 with double quantization, compute in
+        # bf16. Lets an 8GB card hold the 4B base + adapter + optimizer states +
+        # activations comfortably. device_map="auto" places everything on the GPU.
+        print(f"CUDA device: {torch.cuda.get_device_name(0)} -- loading base in 4-bit (QLoRA)")
+        model = AutoModelForCausalLM.from_pretrained(
+            base,
+            quantization_config=BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_compute_dtype=torch.bfloat16,
+            ),
+            device_map="auto",
+        )
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+    else:
+        print("No CUDA device found -- falling back to CPU (float32, slow)")
+        model = AutoModelForCausalLM.from_pretrained(
+            base, torch_dtype=torch.float32, device_map=None,
+        )
+        model.gradient_checkpointing_enable()
+        model.enable_input_require_grads()
+
+    model.config.use_cache = False  # incompatible with gradient checkpointing
 
     model = get_peft_model(model, LoraConfig(
         r=rank,
@@ -115,6 +163,9 @@ def train(base, epochs, rank, lr, max_len):
         lora_dropout=0.05,
         bias="none",
         task_type="CAUSAL_LM",
+        # Verified against transformers' modeling_qwen3.py: Qwen3Attention has
+        # q_proj/k_proj/v_proj/o_proj, Qwen3MLP has gate_proj/up_proj/down_proj --
+        # same naming as Qwen2/Llama-style archs, so these names apply as-is.
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
                         "gate_proj", "up_proj", "down_proj"],
     ))
@@ -133,7 +184,9 @@ def train(base, epochs, rank, lr, max_len):
             logging_steps=1,
             save_strategy="epoch",
             report_to=[],
-            use_cpu=not torch.cuda.is_available(),
+            use_cpu=not use_cuda,
+            bf16=use_cuda,
+            optim="paged_adamw_8bit" if use_cuda else "adamw_torch",
         ),
     ).train()
 
@@ -143,7 +196,7 @@ def train(base, epochs, rank, lr, max_len):
     print("\nNext -- convert to GGUF and serve from Ollama:")
     print("  python llama.cpp/convert_lora_to_gguf.py "
           f"{OUTDIR} --outfile {HERE}/adapter.gguf")
-    print(f"  printf 'FROM qwen3.5:4b\\nADAPTER {HERE}/adapter.gguf\\n' "
+    print(f"  printf 'FROM {OLLAMA_MODEL_TAG}\\nADAPTER {HERE}/adapter.gguf\\n' "
           "> Modelfile && ollama create screenmagnet-qwen -f Modelfile")
 
 

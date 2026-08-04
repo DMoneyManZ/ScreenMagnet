@@ -21,14 +21,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 OLLAMA = "http://localhost:11434/api/generate"
-MODEL = "qwen3.5:4b"
+# The SteamOS box this was originally written for had a plain "qwen3.5:4b" tag.
+# This machine's actual local Ollama install has a Qwen3-4B-Instruct-2507 variant
+# under a different tag -- use what's really here.
+MODEL = "goekdenizguelmez/JOSIEFIED-Qwen3:4b-instruct-2507-q4_k_m"
 CORPUS = Path(__file__).parent / "corpus.jsonl"
 
 SYSTEM = """You are observing a real software project being built, step by step.
 
-The project is ScreenMagnet: a KDE Plasma system-tray app for a SteamOS machine
-that mirrors the desktop to a TV (Samsung/LG via Miracast, Apple TV via AirPlay).
-Linux has no built-in screen-mirroring sender, which is the gap this app fills.
+The project is ScreenMagnet: a free/open-source (GPL-3.0) system-tray app that
+mirrors a PC's screen to an AirPlay-capable TV. It ships for both Windows and
+Linux; on Windows it captures via GStreamer's d3d11screencapturesrc and runs
+natively, on Linux it runs natively if a native H.264 encoder is present and
+falls back to a distrobox container otherwise (e.g. SteamOS, which has none).
+The AirPlay sender itself is doubletake (Go, LGPL-3.0+, not vendored -- patched
+via patches/). Windows and Linux have no built-in screen-mirroring sender,
+which is the gap this app fills. Miracast/Wi-Fi-Direct extend was investigated
+and ruled out -- the project's AirPlay-only development TV doesn't speak it.
 
 For each development step you are given, explain in 3-5 sentences:
   1. What was done.

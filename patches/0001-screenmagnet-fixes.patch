@@ -418,6 +418,217 @@ index 0000000..683b4c3
 +	}
 +	return nil, fmt.Errorf("no display server detected (neither WAYLAND_DISPLAY nor DISPLAY is set)")
 +}
+diff --git a/internal/airplay/capture_windows.go b/internal/airplay/capture_windows.go
+new file mode 100644
+index 0000000..1495e15
+--- /dev/null
++++ b/internal/airplay/capture_windows.go
+@@ -0,0 +1,205 @@
++//go:build windows
++
++package airplay
++
++import (
++	"context"
++	"fmt"
++	"net"
++	"os/exec"
++	"strconv"
++	"strings"
++	"time"
++)
++
++// gstBinary is the gst-launch-1.0 executable name to invoke. GStreamer's
++// Windows MSI installer only ships a ".exe" -- see gstBinaryInspect in
++// capture.go, which special-cases this suffix to also probe with
++// "gst-inspect-1.0.exe".
++const gstBinary = "gst-launch-1.0.exe"
++
++// startPlatformCapture captures the desktop on Windows using
++// d3d11screencapturesrc, GStreamer's wrapper around DXGI Desktop Duplication
++// (and, on newer Windows builds, Windows Graphics Capture -- see the
++// "capture-api" element property). This is the only capture path on Windows;
++// unlike capture_unix.go there is no Wayland/X11 branch to dispatch between.
++// See capture.go for the shared encoder probing and the ScreenCapture type.
++//
++// DOCUMENTED (from this project's README / packaging/windows/vendor/README.md,
++// carried over from the confirmed-working prebuilt binary this file
++// reconstructs the source for): screen data is streamed over a loopback TCP
++// socket rather than the child's stdout. Windows opens console stdio in text
++// mode, which corrupts a raw binary stream (e.g. CRLF translation); every
++// other platform instead reads stdout directly via fdsink fd=1.
++// ScreenCapture.stdout only needs to be an io.ReadCloser, so the accepted
++// net.Conn is dropped in unchanged -- no change to capture.go required.
++func startPlatformCapture(ctx context.Context, cfg CaptureConfig) (*ScreenCapture, error) {
++	if !hasGstElement("d3d11screencapturesrc") {
++		return nil, fmt.Errorf("GStreamer 'd3d11screencapturesrc' plugin not found; install the d3d11 GStreamer plugin (gst-plugins-bad)")
++	}
++
++	captureCtx, cancel := context.WithCancel(ctx)
++
++	// We listen first (so the port is guaranteed bound before gst-launch tries
++	// to connect to it), hand gst-launch a tcpclientsink pointed at our loopback
++	// address, then Accept() the single incoming connection as our read side.
++	ln, err := net.Listen("tcp4", "127.0.0.1:0")
++	if err != nil {
++		cancel()
++		return nil, fmt.Errorf("loopback listener: %w", err)
++	}
++	port := ln.Addr().(*net.TCPAddr).Port
++
++	fps := cfg.FPS
++	if fps <= 0 {
++		fps = 30
++	}
++
++	encoder := detectGstEncoder(cfg)
++
++	srcArgs := []string{
++		"d3d11screencapturesrc",
++		fmt.Sprintf("show-cursor=%t", cfg.ShowCursor),
++		"do-timestamp=true",
++	}
++	if idx, ok := parseWindowsMonitorIndex(cfg.MonitorName); ok {
++		srcArgs = append(srcArgs, fmt.Sprintf("monitor-index=%d", idx))
++		dbg("[CAPTURE] selected monitor index %d (from %q)", idx, cfg.MonitorName)
++	}
++
++	gstArgs := []string{"--quiet"}
++	gstArgs = append(gstArgs, srcArgs...)
++	gstArgs = append(gstArgs,
++		"!", fmt.Sprintf("video/x-raw(memory:D3D11Memory),framerate=%d/1", fps),
++		"!", "queue", "max-size-buffers=1", "max-size-bytes=0", "max-size-time=0", "leaky=downstream",
++	)
++
++	// d3d11convert both converts format and scales (add-borders letterboxes
++	// instead of distorting), all on the GPU while the frame is still D3D11
++	// texture memory -- the same job videoconvert+videoscale do for ximagesrc
++	// on X11, done here without a GPU->CPU round trip until d3d11download.
++	if cfg.Width > 0 && cfg.Height > 0 {
++		gstArgs = append(gstArgs,
++			"!", "d3d11convert", "add-borders=true",
++			"!", fmt.Sprintf("video/x-raw(memory:D3D11Memory),format=%s,width=%d,height=%d,pixel-aspect-ratio=1/1",
++				encoder.rawFormat, cfg.Width, cfg.Height),
++		)
++		dbg("[CAPTURE] scaling to receiver display size %dx%d", cfg.Width, cfg.Height)
++	} else {
++		gstArgs = append(gstArgs,
++			"!", "d3d11convert",
++			"!", fmt.Sprintf("video/x-raw(memory:D3D11Memory),format=%s", encoder.rawFormat),
++		)
++	}
++
++	// Hardware encoders on Windows (nvd3d11h264enc, mfh264enc) and the x264enc
++	// software fallback all expect system-memory frames, so pull the texture
++	// off the GPU before the encoder. (vulkanh264enc, the only encoder that
++	// would want the frame to stay on-GPU via vulkanupload, isn't part of the
++	// GStreamer Windows MSI install this was probed against -- see the build
++	// report -- so needsVulkan should never be true here in practice.)
++	if encoder.needsVulkan {
++		gstArgs = append(gstArgs, "!", "d3d11download", "!", "videoconvert", "!", "vulkanupload")
++	} else {
++		gstArgs = append(gstArgs, "!", "d3d11download", "!", "videoconvert")
++	}
++
++	gstArgs = append(gstArgs, "!")
++	gstArgs = append(gstArgs, encoder.parts...)
++	gstArgs = append(gstArgs,
++		"!", "h264parse", "config-interval=-1",
++		"!", "video/x-h264,stream-format=byte-stream,alignment=au",
++		"!", "tcpclientsink", "host=127.0.0.1", fmt.Sprintf("port=%d", port),
++	)
++
++	dbg("[CAPTURE] gst-launch-1.0 (windows) %s", strings.Join(gstArgs, " "))
++	cmd := exec.CommandContext(captureCtx, gstBinary, gstArgs...)
++
++	stderr, _ := cmd.StderrPipe()
++
++	if err := cmd.Start(); err != nil {
++		cancel()
++		ln.Close()
++		return nil, fmt.Errorf("start gst-launch: %w", err)
++	}
++	go logStderr("GST", stderr)
++
++	// Accept the child's loopback connection. Bounded with a timeout so a
++	// pipeline that fails to reach PLAYING (bad property, missing hardware)
++	// doesn't hang the caller forever instead of surfacing an error.
++	type acceptResult struct {
++		conn net.Conn
++		err  error
++	}
++	acceptCh := make(chan acceptResult, 1)
++	go func() {
++		conn, err := ln.Accept()
++		acceptCh <- acceptResult{conn, err}
++	}()
++
++	var conn net.Conn
++	select {
++	case res := <-acceptCh:
++		ln.Close()
++		if res.err != nil {
++			cancel()
++			_ = cmd.Process.Kill()
++			return nil, fmt.Errorf("accept capture loopback connection: %w", res.err)
++		}
++		conn = res.conn
++	case <-time.After(10 * time.Second):
++		ln.Close()
++		cancel()
++		_ = cmd.Process.Kill()
++		return nil, fmt.Errorf("timed out waiting for capture pipeline to connect over loopback")
++	case <-captureCtx.Done():
++		ln.Close()
++		cancel()
++		_ = cmd.Process.Kill()
++		return nil, captureCtx.Err()
++	}
++
++	capture := &ScreenCapture{
++		cmd:    cmd,
++		stdout: conn,
++		cancel: cancel,
++		waitCh: make(chan struct{}),
++	}
++	go func() {
++		capture.waitErr = cmd.Wait()
++		close(capture.waitCh)
++	}()
++
++	return capture, nil
++}
++
++// parseWindowsMonitorIndex converts a Windows display device path such as
++// `\\.\DISPLAY1` -- what app/screenmagnet/monitors.py falls back to and what
++// the top-level README documents as the format the -monitor flag receives on
++// this platform -- into the zero-based index d3d11screencapturesrc's
++// monitor-index property expects (-1/absent = primary monitor).
++//
++// BEST-EFFORT / UNVERIFIED: this assumes the trailing number in the
++// EnumDisplayDevices-style device path lines up 1:1 with DXGI's output
++// enumeration order (monitor-index 0 = first DXGI output on the default
++// adapter). Both are Windows-documented as "enumeration order," not as the
++// same order as each other, and this machine only has one monitor to test
++// against. If ordering ever disagrees on a real multi-monitor rig, the fix is
++// to resolve the device path to an HMONITOR via Win32 (EnumDisplayMonitors)
++// and pass monitor-handle instead of monitor-index.
++func parseWindowsMonitorIndex(monitorName string) (int, bool) {
++	name := strings.TrimSpace(monitorName)
++	if name == "" {
++		return 0, false
++	}
++	const prefix = `\\.\DISPLAY`
++	if !strings.HasPrefix(strings.ToUpper(name), prefix) {
++		return 0, false
++	}
++	n, err := strconv.Atoi(name[len(prefix):])
++	if err != nil || n < 1 {
++		return 0, false
++	}
++	// DISPLAYn is 1-based; monitor-index is 0-based.
++	return n - 1, true
++}
 diff --git a/internal/airplay/discovery.go b/internal/airplay/discovery.go
 index 7f0c446..d6e6ac9 100644
 --- a/internal/airplay/discovery.go

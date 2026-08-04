@@ -1,0 +1,2 @@
+FROM goekdenizguelmez/JOSIEFIED-Qwen3:4b-instruct-2507-q4_k_m
+ADAPTER C:\Users\murph\ScreenManget\lora\adapter.gguf

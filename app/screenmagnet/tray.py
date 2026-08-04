@@ -5,6 +5,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from PySide6 import QtSvg  # noqa: F401 -- side-effect import: registers the SVG
+# icon-engine plugin (qsvgicon). Without this, QIcon(path/to/*.svg) silently
+# returns a null icon on this PySide6 build and app_icon() falls through to
+# the hand-drawn placeholder pixmap instead of the real logo.
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import (
     QAction,
@@ -31,10 +35,28 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import startup, updater
 from .caster import Caster, preflight
 from .discovery import DiscoveryThread, Screen
 from .monitors import list_monitors
+from .settings_window import SettingsWindow
 from .spinner import ChasingArrows
+from .virtual_display import (
+    DEFAULT_SIDE,
+    NOT_ATTACHED_YET_MSG,
+    NOT_ENABLED_MSG,
+    NOT_INSTALLED_MSG,
+    VALID_SIDES,
+    enable_virtual_display,
+    find_virtual_display_name,
+    is_installed,
+)
+
+# How often to re-check for updates in the background, beyond the one-shot
+# check shortly after startup and whenever the user clicks "Check for
+# Updates" in the settings window.
+UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000  # 6 hours
+UPDATE_CHECK_STARTUP_DELAY_MS = 5_000  # let discovery/caster settle first
 
 APP_NAME = "ScreenMagnet"
 CONFIG = Path.home() / ".config/screenmagnet/config.json"
@@ -54,6 +76,30 @@ def save_config(data: dict) -> None:
         CONFIG.write_text(json.dumps(data, indent=2))
     except OSError:
         pass
+
+
+def _prepare_extend_display(side: str) -> tuple[str, str | None]:
+    """Runs off the Qt GUI thread (see ScreenMagnetTray._start_extend) -- both
+    checking install state and, if needed, enabling the device can shell out to
+    PowerShell, and enabling can block on a UAC prompt the user hasn't answered yet.
+
+    Returns (outcome, monitor_name):
+      - ("not_installed", None)  -- driver was never installed; see NOT_INSTALLED_MSG.
+      - ("not_enabled", None)    -- installed, but turning it on failed or the admin
+                                    prompt was declined; see NOT_ENABLED_MSG.
+      - ("not_attached", None)   -- enabled, but Windows hasn't surfaced it as a
+                                    desktop display yet; see NOT_ATTACHED_YET_MSG.
+      - ("ready", name)          -- enabled and positioned; `name` is the Win32 device
+                                    name to pass straight to Caster.start(monitor=...).
+    """
+    if not is_installed():
+        return "not_installed", None
+    if not enable_virtual_display(side):
+        return "not_enabled", None
+    name = find_virtual_display_name()
+    if not name:
+        return "not_attached", None
+    return "ready", name
 
 
 def app_icon() -> QIcon:
@@ -174,6 +220,54 @@ class Panel(QWidget):
         self.results_scroll.setMinimumHeight(rows_height)
         self.results_scroll.setMaximumHeight(rows_height + ROW_H // 2)
         root.addWidget(self.results_scroll)
+
+        # --- cast mode picker -------------------------------------------------
+        # Shown after picking a screen, in place of the results list: mirror an
+        # existing monitor (the only mode that actually works today) or treat the
+        # TV as new desktop space. Extend needs Windows to have a real virtual
+        # display surface to capture, which doubletake/GStreamer can't fabricate
+        # on their own -- see docs/EXTENDED-DISPLAY.md.
+        self.mode_box = QWidget()
+        modeb = QVBoxLayout(self.mode_box)
+        modeb.setContentsMargins(0, 4, 0, 4)
+        modeb.setSpacing(6)
+        self.mode_label = QLabel("")
+        modeb.addWidget(self.mode_label)
+        self.dup_btn = QPushButton("Cast duplicate of current display")
+        self.dup_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.dup_btn.clicked.connect(lambda: self.tray.cast_to(self._mode_screen, mode="duplicate"))
+        modeb.addWidget(self.dup_btn)
+        self.ext_btn = QPushButton("Cast as additional display")
+        self.ext_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.ext_btn.setToolTip(
+            "Turns the TV into new desktop space instead of mirroring. Needs the "
+            "free VirtualDrivers virtual display driver installed once -- clicking "
+            "this checks/turns it on and explains what's missing if it isn't ready. "
+            "See docs/EXTENDED-DISPLAY.md."
+        )
+        self.ext_btn.clicked.connect(lambda: self.tray.cast_to(self._mode_screen, mode="extend"))
+        modeb.addWidget(self.ext_btn)
+
+        side_row = QHBoxLayout()
+        side_row.addWidget(QLabel("Extend side:"))
+        self.extend_side_combo = QComboBox()
+        self.extend_side_combo.addItem("Right", "right")
+        self.extend_side_combo.addItem("Left", "left")
+        self.extend_side_combo.currentIndexChanged.connect(
+            lambda _i: self.tray.set_extend_side(self.extend_side_combo.currentData())
+        )
+        side_row.addWidget(self.extend_side_combo, 1)
+        modeb.addLayout(side_row)
+
+        back = QPushButton("← Back to screen list")
+        back.setCursor(Qt.CursorShape.PointingHandCursor)
+        back.setFlat(True)
+        back.clicked.connect(self.hide_mode_picker)
+        modeb.addWidget(back)
+
+        self._mode_screen: Screen | None = None
+        self.mode_box.hide()
+        root.addWidget(self.mode_box)
 
         # --- PIN entry ------------------------------------------------------
         self.pin_box = QWidget()
@@ -300,12 +394,30 @@ class Panel(QWidget):
 
         for s in screens:
             row = ScreenRow(s)
-            row.clicked.connect(lambda _=False, sc=s: self.tray.cast_to(sc))
+            row.clicked.connect(lambda _=False, sc=s: self.show_mode_picker(sc))
             self.results_layout.addWidget(row)
 
     def set_status(self, text: str, warn: bool = False):
         self.status.setText(text)
         self.status.setStyleSheet("color: palette(link-visited);" if warn else "")
+
+    # -- cast mode picker ------------------------------------------------------
+    def show_mode_picker(self, screen: Screen):
+        self._mode_screen = screen
+        self.mode_label.setText(f"Cast to {screen.name}:")
+        self.extend_side_combo.blockSignals(True)
+        idx = self.extend_side_combo.findData(self.tray.cfg.get("extend_side", DEFAULT_SIDE))
+        self.extend_side_combo.setCurrentIndex(max(idx, 0))
+        self.extend_side_combo.blockSignals(False)
+        self.results_scroll.hide()
+        self.mode_box.show()
+        self.tray.place_panel()
+
+    def hide_mode_picker(self):
+        self._mode_screen = None
+        self.mode_box.hide()
+        self.results_scroll.show()
+        self.tray.place_panel()
 
 
 class ScreenMagnetTray(QSystemTrayIcon):
@@ -318,6 +430,13 @@ class ScreenMagnetTray(QSystemTrayIcon):
         self._discovery: DiscoveryThread | None = None
         self._pending: Screen | None = None
         self._screens: list[Screen] = []
+        self._extend_worker: updater.CallWorker | None = None
+
+        # -- settings window + self-update state ------------------------
+        self.settings_window: SettingsWindow | None = None
+        self._update_check_worker: updater.CallWorker | None = None
+        self._update_pull_worker: updater.CallWorker | None = None
+        self._latest_update: updater.UpdateCheckResult | None = None
 
         self.setToolTip(APP_NAME)
         self.activated.connect(self._on_activated)
@@ -329,6 +448,16 @@ class ScreenMagnetTray(QSystemTrayIcon):
         act_rescan = QAction("Rescan", self)
         act_rescan.triggered.connect(self.rescan)
         menu.addAction(act_rescan)
+        menu.addSeparator()
+        act_settings = QAction("Settings...", self)
+        act_settings.triggered.connect(self.open_settings)
+        menu.addAction(act_settings)
+        # Hidden until a background check finds a newer commit upstream --
+        # see check_for_updates()/_apply_update_result().
+        self.act_update_now = QAction("Update now", self)
+        self.act_update_now.triggered.connect(self.update_now)
+        self.act_update_now.setVisible(False)
+        menu.addAction(self.act_update_now)
         menu.addSeparator()
         act_quit = QAction("Quit", self)
         act_quit.triggered.connect(self.quit)
@@ -344,6 +473,17 @@ class ScreenMagnetTray(QSystemTrayIcon):
         problems = preflight()
         if problems:
             self.panel.set_status("⚠ " + "; ".join(problems), warn=True)
+
+        # -- self-update: background check shortly after startup, then
+        # periodically. Both check_for_update() and run_git_pull() shell out
+        # to git (and check_for_update() hits the network), so both run on
+        # updater.CallWorker off this thread -- see check_for_updates()/
+        # update_now() -- rather than blocking tray construction or the Qt
+        # event loop on a slow/offline network.
+        self._update_timer = QTimer(self)
+        self._update_timer.timeout.connect(self.check_for_updates)
+        self._update_timer.start(UPDATE_CHECK_INTERVAL_MS)
+        QTimer.singleShot(UPDATE_CHECK_STARTUP_DELAY_MS, self.check_for_updates)
 
     # -- tray behaviour ------------------------------------------------------
     def _on_activated(self, reason):
@@ -431,10 +571,71 @@ class ScreenMagnetTray(QSystemTrayIcon):
                 low_latency=self.panel.lowlat.isChecked(),
             )
 
-    def cast_to(self, screen: Screen):
+    def set_extend_side(self, side: str):
+        if side not in VALID_SIDES:
+            return
+        self.cfg["extend_side"] = side
+        save_config(self.cfg)
+
+    def cast_to(self, screen: Screen, mode: str = "duplicate"):
+        if mode == "extend":
+            self._start_extend(screen)
+            return
+        self._begin_cast(screen)
+
+    def _start_extend(self, screen: Screen):
+        """Kick off install/enable/position checks for the virtual display off the GUI
+        thread -- enabling it (if needed) can shell out to PowerShell and block on a
+        UAC prompt, so this must not run inline on the Qt event loop. See
+        virtual_display.py / docs/EXTENDED-DISPLAY.md."""
+        if self._extend_worker is not None and self._extend_worker.isRunning():
+            return
+        side = self.cfg.get("extend_side", DEFAULT_SIDE)
+        self.panel.hide_mode_picker()
+        self.panel.hide_pin()
+        self.panel.set_scanning(True, "Checking the virtual display…")
+        self.panel.set_status("")
+        worker = updater.CallWorker(_prepare_extend_display, side)
+        worker.done.connect(lambda result, sc=screen: self._on_extend_prepared(sc, result))
+        worker.finished.connect(worker.deleteLater)
+        self._extend_worker = worker
+        worker.start()
+
+    def _on_extend_prepared(self, screen: Screen, result: tuple[str, str | None]):
+        outcome, monitor_name = result
+        self.panel.set_scanning(False)
+
+        if outcome == "not_installed":
+            self.panel.set_status(f"⚠ {NOT_INSTALLED_MSG}", warn=True)
+            self.place_panel()
+            return
+        if outcome == "not_enabled":
+            self.panel.set_status(f"⚠ {NOT_ENABLED_MSG}", warn=True)
+            self.place_panel()
+            return
+        if outcome != "ready" or not monitor_name:
+            self.panel.set_status(f"⚠ {NOT_ATTACHED_YET_MSG}", warn=True)
+            self.place_panel()
+            return
+
+        # The virtual display is up. It should now show up in monitors.py's
+        # generic enumeration exactly like any other screen (confirmed by the
+        # research -- no VDD-specific capture code needed); select it and cast
+        # to it exactly like "duplicate" mode does today.
+        self.panel.refresh_monitors(monitor_name)
+        if self.panel.mon_combo.findData(monitor_name) < 0:
+            # Windows/Qt haven't caught up yet -- don't cast to the wrong monitor.
+            self.panel.set_status(f"⚠ {NOT_ATTACHED_YET_MSG}", warn=True)
+            self.place_panel()
+            return
+        self.set_monitor(monitor_name)
+        self._begin_cast(screen)
+
+    def _begin_cast(self, screen: Screen):
         self._pending = screen
         self.cfg["last_screen"] = screen.ip
         save_config(self.cfg)
+        self.panel.hide_mode_picker()
         self.panel.hide_pin()
         self.panel.set_scanning(True, f"Connecting to {screen.name}…")
         self.panel.set_status("")
@@ -488,6 +689,94 @@ class ScreenMagnetTray(QSystemTrayIcon):
         self.setToolTip(APP_NAME)
         if not self.panel.status.text().startswith("⚠"):
             self.panel.set_status("Stopped.")
+
+    # -- settings window -------------------------------------------------
+    def open_settings(self):
+        if self.settings_window is None:
+            self.settings_window = SettingsWindow()
+            self.settings_window.check_for_updates_requested.connect(self.check_for_updates)
+            self.settings_window.update_now_requested.connect(self.update_now)
+            # Native QCheckBox signal, per settings_window.py's own docs.
+            self.settings_window.startup_checkbox.toggled.connect(self._on_startup_toggled)
+
+        # Re-sync every time the window is opened, not just on first
+        # construction -- the Registry value (or a prior background update
+        # check) may have changed since the window was last shown.
+        self.settings_window.set_launch_at_startup(startup.is_enabled())
+        if self._latest_update is not None:
+            self._apply_update_result(self._latest_update)
+
+        self.settings_window.show()
+        self.settings_window.raise_()
+        self.settings_window.activateWindow()
+
+    def _on_startup_toggled(self, enabled: bool):
+        try:
+            (startup.enable if enabled else startup.disable)()
+        except RuntimeError as exc:  # non-Windows only, per startup.py
+            self.panel.set_status(f"⚠ {exc}", warn=True)
+            if self.settings_window is not None:
+                self.settings_window.set_launch_at_startup(not enabled)
+
+    # -- self-update ---------------------------------------------------------
+    def check_for_updates(self):
+        if self._update_check_worker is not None and self._update_check_worker.isRunning():
+            return
+        if self.settings_window is not None:
+            self.settings_window.set_update_status("Checking for updates…")
+        worker = updater.CallWorker(updater.check_for_update)
+        worker.done.connect(self._on_update_check_done)
+        worker.finished.connect(worker.deleteLater)
+        self._update_check_worker = worker
+        worker.start()
+
+    def _on_update_check_done(self, result: updater.UpdateCheckResult):
+        self._latest_update = result
+        self._apply_update_result(result)
+
+    def _apply_update_result(self, result: updater.UpdateCheckResult):
+        if not result.ok:
+            text = f"Update check failed: {result.error}"
+            self.act_update_now.setVisible(False)
+            self.setIcon(app_icon())
+        elif result.update_available:
+            text = f"Update available: {result.remote_short}"
+            self.act_update_now.setVisible(True)
+            self.setIcon(updater.badge_icon(app_icon()))
+        else:
+            text = f"Up to date ({result.local_short})."
+            self.act_update_now.setVisible(False)
+            self.setIcon(app_icon())
+
+        if self.settings_window is not None:
+            self.settings_window.set_update_status(
+                text, available=result.ok and result.update_available, latest=result.remote_commit,
+            )
+
+    def update_now(self):
+        if self._update_pull_worker is not None and self._update_pull_worker.isRunning():
+            return
+        self.act_update_now.setEnabled(False)
+        if self.settings_window is not None:
+            self.settings_window.update_now_btn.setEnabled(False)
+        worker = updater.CallWorker(updater.run_git_pull)
+        worker.done.connect(self._on_update_pull_done)
+        worker.finished.connect(worker.deleteLater)
+        self._update_pull_worker = worker
+        worker.start()
+
+    def _on_update_pull_done(self, message: str):
+        self.act_update_now.setEnabled(True)
+        success = message.startswith("Update pulled successfully")
+        if self.settings_window is not None:
+            self.settings_window.update_now_btn.setEnabled(True)
+            self.settings_window.set_update_result(message, success=success)
+            if success:
+                self.settings_window.reload_changelog()
+        if success:
+            self.act_update_now.setVisible(False)
+            self.setIcon(app_icon())
+        self.panel.set_status(message, warn=not success)
 
     def quit(self):
         self.caster.stop()

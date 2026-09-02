@@ -54,6 +54,17 @@ app/run.sh        # Linux
 app\run.bat        # Windows
 ```
 
+To get ScreenMagnet in your application menu and dock on Linux:
+
+```bash
+packaging/linux/install-desktop-entry.sh              # --uninstall to remove
+```
+
+Run it from a terminal in `app/`, or use the desktop entry above. Launching
+`python -m screenmagnet` from anywhere else fails with `No module named
+screenmagnet` unless the package is installed into the venv -- the plain
+`-m` form finds it via the current directory.
+
 Needs **Python 3.13 specifically** — PySide6 publishes no 3.14 wheels yet:
 
 ```bash

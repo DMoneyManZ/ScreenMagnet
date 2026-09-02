@@ -686,3 +686,27 @@ index f862c86..2d336d2 100644
  }
  
  // SetTargetLatency sets the desired end-to-end playout latency target.
+diff --git a/internal/airplay/mirror.go b/internal/airplay/mirror.go
+index dcee0d6..90d20af 100644
+--- a/internal/airplay/mirror.go
++++ b/internal/airplay/mirror.go
+@@ -478,13 +478,16 @@ func (c *AirPlayClient) setupMirrorSession(ctx context.Context, cfg StreamConfig
+ 		}
+ 	}
+ 
+-	// Set default volume (0 dB is max; see SetAudioMuted)
+-	volumeBody := []byte("volume: 20.000000\r\n")
++	// Start muted. AirPlay volume is decibels: 0 is maximum and -144 is muted
++	// (see SetAudioMuted). The old value of 20 was 20 dB *above* max, so every
++	// receiver clamped it and a cast slammed the TV to 100% volume on connect.
++	// Callers raise it deliberately via SetAudioMuted(false).
++	volumeBody := []byte("volume: -144.000000\r\n")
+ 	_, _, err = c.rtspRequest("SET_PARAMETER", audioURI, "text/parameters", volumeBody, nil)
+ 	if err != nil {
+ 		dbg("[SETUP] SET_PARAMETER volume failed (non-fatal): %v", err)
+ 	} else {
+-		dbg("[SETUP] SET_PARAMETER volume=20 sent")
++		dbg("[SETUP] SET_PARAMETER volume=-144 (muted) sent")
+ 	}
+ 	// Send volume twice (pcap shows real senders do this)
+ 	_, _, _ = c.rtspRequest("SET_PARAMETER", audioURI, "text/parameters", volumeBody, nil)

@@ -131,6 +131,7 @@ Windows too. It is not vendored here; `patches/` holds our changes against upstr
 | `-key-int` | Keyframe interval, for latency experiments. |
 | Windows capture backend | `d3d11screencapturesrc` / DXGI Desktop Duplication, streamed over a loopback TCP socket instead of stdout (Windows' text-mode stdio otherwise corrupts the binary stream). |
 | Real encoder probing | `-hwaccel auto` used to pick whatever encoder's element factory was *registered*, regardless of whether the hardware was actually present — killing the pipeline on its first frame (observed: NVENC selected on an AMD box). It now probes by encoding two real test frames first. |
+| Muted at session setup | Setup sent `volume: 20`, but AirPlay volume is decibels and **0 is the maximum** — 20 dB above it, so receivers clamped to full and every cast slammed the TV to 100% on connect. Now starts at `-144` (muted); callers raise it deliberately. |
 
 ## Known limitations
 

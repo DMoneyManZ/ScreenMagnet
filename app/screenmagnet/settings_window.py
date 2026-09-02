@@ -24,16 +24,14 @@ from PySide6 import QtSvg  # noqa: F401 -- side-effect import: registers the SVG
 # without this, QIcon(*.svg) can silently come back null on this PySide6 build.
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import (
-    QColor,
     QDesktopServices,
     QDoubleValidator,
     QIcon,
-    QPainter,
-    QPixmap,
 )
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -47,6 +45,8 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__
+from .appicon import ICON_THEMES, app_icon, icon_theme_name
+from .config import update_config
 
 # --- identity / links --------------------------------------------------------
 APP_NAME = "ScreenMagnet"
@@ -54,8 +54,6 @@ CREATOR = "DMoneyManZ"
 GITHUB_URL = "https://github.com/DMoneyManZ/ScreenMagnet"
 CONTACT_EMAIL = "drmedison@icloud.com"
 
-# app/screenmagnet/settings_window.py -> app/assets  (mirrors tray.py's ASSETS)
-ASSETS = Path(__file__).resolve().parent.parent / "assets"
 # app/screenmagnet/settings_window.py -> repo root
 CHANGELOG_PATH = Path(__file__).resolve().parent.parent.parent / "CHANGELOG.md"
 CHANGELOG_PLACEHOLDER = (
@@ -72,34 +70,6 @@ CHANGELOG_PLACEHOLDER = (
 # the whole donation card, before ScreenMagnet ever ships as v1.0.
 # ------------------------------------------------------------------------
 PAYPAL_DONATE_BASE = "https://paypal.me/PLACEHOLDER"
-
-
-def _settings_icon() -> QIcon:
-    """Same fallback chain as tray.app_icon(), duplicated here so this module
-    doesn't have to import tray.py just to get a window/header icon."""
-    svg = ASSETS / "screenmagnet.svg"
-    if svg.exists():
-        icon = QIcon(str(svg))
-        if not icon.isNull():
-            return icon
-    themed = QIcon.fromTheme("video-display")
-    if not themed.isNull():
-        return themed
-
-    pm = QPixmap(64, 64)
-    pm.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor("#dcdcdc"))
-    p.drawRoundedRect(6, 12, 52, 34, 5, 5)
-    p.setBrush(QColor("#2c2c2c"))
-    p.drawRoundedRect(10, 16, 44, 26, 3, 3)
-    p.setBrush(QColor("#dcdcdc"))
-    p.drawRect(26, 46, 12, 6)
-    p.drawRoundedRect(18, 52, 28, 5, 2, 2)
-    p.end()
-    return QIcon(pm)
 
 
 def _card(title: str | None = None) -> tuple[QFrame, QVBoxLayout]:
@@ -172,6 +142,7 @@ class SettingsWindow(QDialog):
             integrator wants to refresh it after a successful update pull.
     """
 
+    icon_theme_changed = Signal(str)
     check_for_updates_requested = Signal()
     update_now_requested = Signal()
 
@@ -180,7 +151,7 @@ class SettingsWindow(QDialog):
         self._latest_known: str | None = None
 
         self.setWindowTitle(f"{APP_NAME} Settings — v{__version__}")
-        self.setWindowIcon(_settings_icon())
+        self.setWindowIcon(app_icon())
         self.setWindowModality(Qt.WindowModality.NonModal)
         self.setMinimumSize(480, 620)
         self.resize(520, 720)
@@ -204,6 +175,7 @@ class SettingsWindow(QDialog):
         root.addWidget(self._build_about_card())
         root.addWidget(self._build_changelog_card())
         root.addWidget(self._build_update_card())
+        root.addWidget(self._build_appearance_card())
         root.addWidget(self._build_startup_card())
         root.addWidget(self._build_donation_card())
         root.addWidget(self._build_copyright_card())
@@ -224,7 +196,7 @@ class SettingsWindow(QDialog):
         row.setSpacing(12)
 
         icon_label = QLabel()
-        icon_label.setPixmap(_settings_icon().pixmap(48, 48))
+        icon_label.setPixmap(app_icon().pixmap(48, 48))
         row.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignTop)
 
         col = QVBoxLayout()
@@ -338,6 +310,36 @@ class SettingsWindow(QDialog):
         self.update_result_label.setText(message)
         self.update_result_label.setStyleSheet("" if success else "color: palette(link-visited);")
         self.update_result_label.show()
+
+    # -- appearance ----------------------------------------------------------
+    def _build_appearance_card(self) -> QFrame:
+        frame, lay = _card("Appearance")
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(QLabel("Icon theme"))
+        self.icon_theme_combo = QComboBox()
+        self.icon_theme_combo.addItems(ICON_THEMES)
+        self.icon_theme_combo.setCurrentText(icon_theme_name())
+        self.icon_theme_combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.icon_theme_combo.currentTextChanged.connect(self._on_icon_theme_changed)
+        row.addWidget(self.icon_theme_combo)
+        row.addStretch(1)
+        lay.addLayout(row)
+
+        hint = QLabel(
+            "Colour of the tray and window icon. Default is white, which reads "
+            "correctly on the dark panels most desktops use; Dark is for light ones."
+        )
+        hint.setWordWrap(True)
+        hint.setEnabled(False)
+        lay.addWidget(hint)
+        return frame
+
+    def _on_icon_theme_changed(self, name: str) -> None:
+        update_config(icon_theme=name)
+        self.setWindowIcon(app_icon(name))
+        self.icon_theme_changed.emit(name)
 
     # -- launch at startup ---------------------------------------------------
     def _build_startup_card(self) -> QFrame:

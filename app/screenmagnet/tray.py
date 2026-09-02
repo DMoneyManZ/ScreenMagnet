@@ -102,13 +102,33 @@ def _prepare_extend_display(side: str) -> tuple[str, str | None]:
     return "ready", name
 
 
+# Sizes baked into the tray icon. A QIcon built straight from an SVG path has
+# an empty availableSizes(), and Qt's StatusNotifier backend serialises
+# IconPixmap from exactly that list -- so GNOME receives a blank 16x16 and the
+# tray icon is invisible. Rasterising at these sizes populates the list.
+_ICON_SIZES = (16, 22, 24, 32, 48, 64)
+
+
 def app_icon() -> QIcon:
-    """A screen glyph. Prefers the shipped SVG, falls back to a drawn pixmap."""
+    """A screen glyph. Prefers the installed theme icon, then the shipped SVG."""
+    # A themed icon lets Qt send IconName over D-Bus, which the host resolves
+    # itself -- the most reliable path, and what install-desktop-entry.sh sets up.
+    themed = QIcon.fromTheme("screenmagnet")
+    if not themed.isNull() and themed.availableSizes():
+        return themed
+
     svg = ASSETS / "screenmagnet.svg"
     if svg.exists():
-        icon = QIcon(str(svg))
-        if not icon.isNull():
-            return icon
+        src = QIcon(str(svg))
+        if not src.isNull():
+            icon = QIcon()
+            for size in _ICON_SIZES:
+                pm = src.pixmap(size, size)
+                if not pm.isNull():
+                    icon.addPixmap(pm)
+            if icon.availableSizes():
+                return icon
+
     themed = QIcon.fromTheme("video-display")
     if not themed.isNull():
         return themed

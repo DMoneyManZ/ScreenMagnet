@@ -26,8 +26,30 @@ DIST="$HERE/dist"
 rm -rf "$APPDIR" "$DIST" "$HERE/build-venv" "$HERE/frozen" "$HERE/build"
 mkdir -p "$APPDIR/usr/bin" "$DIST"
 
+# Python 3.13 specifically -- that is what release.yml pins via setup-python, so
+# it is the only version this build is tested against. Override the interpreter
+# with PYTHON=/path/to/python3.13 if yours lives somewhere unusual.
+PYTHON="${PYTHON:-python3.13}"
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+    cat >&2 <<HINT
+error: $PYTHON not found.
+
+This script needs Python 3.13; your distro probably ships something newer.
+Any of these work -- no root required for the first two:
+
+    uv python install 3.13     # then: PATH="\$(dirname \$(uv python find 3.13)):\$PATH"
+    pyenv install 3.13         # then: pyenv shell 3.13
+    sudo add-apt-repository ppa:deadsnakes/ppa && sudo apt install python3.13-venv
+
+Or point at an existing install directly:
+
+    PYTHON=/path/to/python3.13 $0 <doubletake-binary>
+HINT
+    exit 1
+fi
+
 echo "=== 1/4 freezing the app with PyInstaller ==="
-python3.13 -m venv "$HERE/build-venv"
+"$PYTHON" -m venv "$HERE/build-venv"
 "$HERE/build-venv/bin/pip" install --upgrade pip >/dev/null
 "$HERE/build-venv/bin/pip" install PySide6==6.11.1 zeroconf==0.150.0 pyinstaller
 

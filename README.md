@@ -43,7 +43,10 @@ and run it. It bundles everything — the app, the AirPlay sender, GStreamer, an
 runtime — nothing else to install first. You'll get one standard "allow this app to make
 changes" prompt; after that it's fully unattended.
 
-**Linux:** an AppImage is planned but not built yet — for now, run from source (below). If
+**Linux:** the AppImage build is working and runs in CI on every release, but no
+release has been cut yet — so there is nothing to download from Releases so far.
+Build one yourself with `packaging/linux/build-appimage.sh <doubletake-binary>`, or
+run from source (below). If
 you're on SteamOS or another host with no H.264 GStreamer encoder available, see
 [Why a container](#why-a-container).
 
@@ -138,7 +141,9 @@ Windows too. It is not vendored here; `patches/` holds our changes against upstr
 - **No audio on Windows yet.** `doubletake`'s audio capture only has a Linux backend
   (PulseAudio/PipeWire monitor sources) — casting on Windows currently sends video only.
   A Windows WASAPI loopback backend is a planned follow-up.
-- **Linux AppImage not built yet** — run from source for now.
+- **No Linux release published yet.** The AppImage builds cleanly (verified locally:
+  86 MB, bundles doubletake and the frozen Qt app) and the release workflow builds it
+  on `ubuntu-latest`, but no tag has been pushed, so Releases has no Linux artefact yet.
 
 ## Latency
 

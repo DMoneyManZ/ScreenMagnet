@@ -71,5 +71,10 @@ if [ ! -x "$HERE/appimagetool.AppImage" ]; then
     chmod +x "$HERE/appimagetool.AppImage"
 fi
 
-ARCH=x86_64 "$HERE/appimagetool.AppImage" "$APPDIR" "$DIST/ScreenMagnet-x86_64.AppImage"
+# --appimage-extract-and-run: appimagetool is itself an AppImage, so running it
+# normally needs libfuse.so.2. Ubuntu 22.04+ (and GitHub's ubuntu-latest runners)
+# ship only FUSE 3, so the plain invocation dies with "dlopen(): error loading
+# libfuse.so.2". This flag unpacks the tool and runs it directly -- no FUSE needed.
+ARCH=x86_64 "$HERE/appimagetool.AppImage" --appimage-extract-and-run \
+    "$APPDIR" "$DIST/ScreenMagnet-x86_64.AppImage"
 echo "Built $DIST/ScreenMagnet-x86_64.AppImage"

@@ -5,8 +5,49 @@ on:
     tags: ["v*"]
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 jobs:
+  version-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require matching application, package and tag versions
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import ast
+          import os
+          import pathlib
+          import tomllib
+
+          init_tree = ast.parse(pathlib.Path("app/screenmagnet/__init__.py").read_text())
+          app_version = next(
+              ast.literal_eval(node.value)
+              for node in init_tree.body
+              if isinstance(node, ast.Assign)
+              and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets)
+          )
+          with pathlib.Path("pyproject.toml").open("rb") as handle:
+              project_version = tomllib.load(handle)["project"]["version"]
+          if app_version != project_version:
+              raise SystemExit(
+                  f"version mismatch: app={app_version!r}, pyproject={project_version!r}"
+              )
+          if os.environ["REF_TYPE"] == "tag":
+              tag_version = os.environ["REF_NAME"].removeprefix("v").split("-", 1)[0]
+              if tag_version != app_version:
+                  raise SystemExit(
+                      f"tag mismatch: tag={os.environ['REF_NAME']!r}, app={app_version!r}"
+                  )
+          print(f"release version validated: {app_version}")
+          PY
+
   windows:
+    needs: version-check
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,7 +59,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install PySide6==6.11.1 zeroconf==0.150.0 pyinstaller
+          pip install PySide6==6.11.1 zeroconf==0.150.0 pyinstaller==6.22.2
 
       - name: Freeze the app with PyInstaller
         shell: pwsh
@@ -58,7 +99,10 @@ jobs:
           path: packaging/windows/output/ScreenMagnet-Setup.exe
 
   linux:
-    runs-on: ubuntu-latest
+    needs: version-check
+    # Build on the oldest supported Ubuntu so the frozen payload does not pick
+    # up a newer glibc baseline than users have.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -74,31 +118,44 @@ jobs:
         run: |
           git clone https://github.com/omarroth/doubletake /tmp/doubletake
           cd /tmp/doubletake
-          git checkout 8ccea5f
+          git checkout 8ccea5fb2a72765502f351595765812030efed5d
           git apply "$GITHUB_WORKSPACE/patches/0001-screenmagnet-fixes.patch"
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/doubletake-linux ./cmd/doubletake
 
       - name: Build the AppImage
         run: |
           sudo apt-get update
-          sudo apt-get install -y libegl1 libfuse2
+          sudo apt-get install -y \
+            appstream desktop-file-utils libegl1 libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-render-util0 libxcb-util1 libxcb-xkb1
           bash packaging/linux/build-appimage.sh /tmp/doubletake-linux
+
+      - name: Verify the AppImage
+        run: bash packaging/linux/verify-appimage.sh packaging/linux/dist/ScreenMagnet-x86_64.AppImage
 
       - uses: actions/upload-artifact@v4
         with:
           name: ScreenMagnet-x86_64-AppImage
-          path: packaging/linux/dist/ScreenMagnet-x86_64.AppImage
+          path: |
+            packaging/linux/dist/ScreenMagnet-x86_64.AppImage
+            packaging/linux/dist/ScreenMagnet-x86_64.AppImage.sha256
 
   release:
-    needs: [windows, linux]
-    runs-on: ubuntu-latest
+    needs: [version-check, windows, linux]
+    runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
       - uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
           files: |
             artifacts/ScreenMagnet-Setup-windows/ScreenMagnet-Setup.exe
             artifacts/ScreenMagnet-x86_64-AppImage/ScreenMagnet-x86_64.AppImage
+            artifacts/ScreenMagnet-x86_64-AppImage/ScreenMagnet-x86_64.AppImage.sha256

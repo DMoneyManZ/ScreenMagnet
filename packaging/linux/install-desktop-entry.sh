@@ -23,9 +23,11 @@ fi
 mkdir -p "$APPS" "$ICONS"
 install -m644 "$REPO/app/assets/screenmagnet.svg" "$ICONS/screenmagnet.svg"
 
-# run.sh already resolves the venv, checks PySide6 and enforces one instance.
-sed -e "s|@EXEC@|$REPO/app/run.sh|" \
-    -e "s|@WORKDIR@|$REPO/app|" \
+# Keep menu launches on the same dependency-aware path as terminal launches.
+EXEC_VALUE="$(printf '%s' "$REPO/screenmagnet-linux.sh" | sed 's/[&|\\]/\\&/g')"
+WORKDIR_VALUE="$(printf '%s' "$REPO/app" | sed 's/[&|\\]/\\&/g')"
+sed -e "s|@EXEC@|$EXEC_VALUE|" \
+    -e "s|@WORKDIR@|$WORKDIR_VALUE|" \
     "$REPO/app/screenmagnet.desktop" > "$ENTRY"
 chmod +x "$ENTRY"
 
@@ -34,4 +36,4 @@ gtk-update-icon-cache -f -t "${ICONS%/scalable/apps}" 2>/dev/null || true
 
 command -v desktop-file-validate >/dev/null && desktop-file-validate "$ENTRY"
 echo "Installed $ENTRY"
-echo "  Exec=$REPO/app/run.sh"
+echo "  Exec=bash $REPO/screenmagnet-linux.sh run-source"

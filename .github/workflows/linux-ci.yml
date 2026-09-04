@@ -1,0 +1,126 @@
+name: Linux packaging CI
+
+on:
+  push:
+    branches: ["linux-ubuntu-support"]
+    paths:
+      - ".github/workflows/linux-ci.yml"
+      - "app/**"
+      - "packaging/linux/**"
+      - "packaging/pyinstaller_entry.py"
+      - "patches/**"
+      - "pyproject.toml"
+      - "screenmagnet-linux.sh"
+  pull_request:
+    paths:
+      - ".github/workflows/linux-ci.yml"
+      - "app/**"
+      - "packaging/linux/**"
+      - "packaging/pyinstaller_entry.py"
+      - "patches/**"
+      - "pyproject.toml"
+      - "screenmagnet-linux.sh"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  python-compatibility:
+    name: Python ${{ matrix.python }} compatibility
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-util1 libxcb-xkb1
+
+      - name: Install ScreenMagnet in an isolated environment
+        run: |
+          python -m pip install --upgrade pip
+          pip install --editable .
+
+      - name: Run offline application smoke test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python app/tests/ci_smoke_test.py
+
+  build-appimage:
+    name: Build on Ubuntu 22.04
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install packaging libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            appstream desktop-file-utils libegl1 libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-render-util0 libxcb-util1 libxcb-xkb1
+
+      - name: Build pinned doubletake sender
+        run: |
+          git clone https://github.com/omarroth/doubletake /tmp/doubletake
+          cd /tmp/doubletake
+          git checkout 8ccea5fb2a72765502f351595765812030efed5d
+          git apply "$GITHUB_WORKSPACE/patches/0001-screenmagnet-fixes.patch"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/doubletake-linux ./cmd/doubletake
+
+      - name: Build and verify AppImage without FUSE
+        run: |
+          bash packaging/linux/build-appimage.sh /tmp/doubletake-linux
+          bash packaging/linux/verify-appimage.sh packaging/linux/dist/ScreenMagnet-x86_64.AppImage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ScreenMagnet-linux-ci
+          path: |
+            packaging/linux/dist/ScreenMagnet-x86_64.AppImage
+            packaging/linux/dist/ScreenMagnet-x86_64.AppImage.sha256
+
+  ubuntu-24-runtime:
+    name: Run Ubuntu 22.04 artifact on Ubuntu 24.04
+    needs: build-appimage
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ScreenMagnet-linux-ci
+          path: artifact
+
+      - name: Install Qt validation and FUSE runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            desktop-file-utils libegl1 libfuse2t64 libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-render-util0 libxcb-util1 libxcb-xkb1
+
+      - name: Verify extract fallback and normal FUSE execution
+        run: |
+          chmod +x artifact/ScreenMagnet-x86_64.AppImage
+          bash packaging/linux/verify-appimage.sh artifact/ScreenMagnet-x86_64.AppImage
+          QT_QPA_PLATFORM=offscreen artifact/ScreenMagnet-x86_64.AppImage --self-test

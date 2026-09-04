@@ -23,6 +23,7 @@ from __future__ import annotations
 import functools
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -110,9 +111,12 @@ def _sender_argv(args: list[str]) -> tuple[str, list[str]]:
     """Build the (program, argv) pair that runs doubletake on this platform."""
     if _runs_natively():
         return str(BINARY), args
-    inner = ["cd", str(DOUBLETAKE_DIR), "&&", "DISPLAY=:0", "exec", "./bin/doubletake"]
-    inner += args
-    return "distrobox", ["enter", CONTAINER, "--", "bash", "-lc", " ".join(inner)]
+    inner = (
+        f"cd {shlex.quote(str(DOUBLETAKE_DIR))} && "
+        "exec ./bin/doubletake "
+        + " ".join(shlex.quote(arg) for arg in args)
+    )
+    return "distrobox", ["enter", CONTAINER, "--", "bash", "-lc", inner]
 
 
 class Caster(QObject):

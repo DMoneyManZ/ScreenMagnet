@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build a Linux AppImage for ScreenMagnet. Must run on Linux (CI does this on
-# ubuntu-latest; run it yourself on any Linux box with python3.13 and curl).
+# Ubuntu 22.04; run it yourself on any glibc-based x86_64 Linux host with
+# Python 3.13 or 3.14 and curl).
 #
 # Usage: packaging/linux/build-appimage.sh <path-to-doubletake-linux-binary>
 #
@@ -17,6 +18,10 @@ if [ $# -ne 1 ]; then
     exit 1
 fi
 DOUBLETAKE_BIN="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+if [ ! -f "$DOUBLETAKE_BIN" ] || [ ! -x "$DOUBLETAKE_BIN" ]; then
+    echo "error: doubletake must be an executable file: $DOUBLETAKE_BIN" >&2
+    exit 1
+fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
@@ -26,20 +31,29 @@ DIST="$HERE/dist"
 rm -rf "$APPDIR" "$DIST" "$HERE/build-venv" "$HERE/frozen" "$HERE/build"
 mkdir -p "$APPDIR/usr/bin" "$DIST"
 
-# Python 3.13 specifically -- that is what release.yml pins via setup-python, so
-# it is the only version this build is tested against. Override the interpreter
-# with PYTHON=/path/to/python3.13 if yours lives somewhere unusual.
-PYTHON="${PYTHON:-python3.13}"
-if ! command -v "$PYTHON" >/dev/null 2>&1; then
+# The official artifact is frozen with 3.13 for a stable build baseline. 3.14
+# is also tested in CI and is accepted for local builds. PyInstaller embeds the
+# selected interpreter, so the finished AppImage never imports host Python.
+if [ -n "${PYTHON:-}" ]; then
+    PYTHON_BIN="$PYTHON"
+else
+    PYTHON_BIN=""
+    for candidate in python3.13 python3.14; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            PYTHON_BIN="$candidate"
+            break
+        fi
+    done
+fi
+if [ -z "$PYTHON_BIN" ] || ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
     cat >&2 <<HINT
-error: $PYTHON not found.
+error: no supported Python interpreter found.
 
-This script needs Python 3.13; your distro probably ships something newer.
-Any of these work -- no root required for the first two:
+Use Python 3.13 (release baseline) or 3.14. These require no system-wide
+installation when uv or pyenv is available:
 
-    uv python install 3.13     # then: PATH="\$(dirname \$(uv python find 3.13)):\$PATH"
+    uv python install 3.13
     pyenv install 3.13         # then: pyenv shell 3.13
-    sudo add-apt-repository ppa:deadsnakes/ppa && sudo apt install python3.13-venv
 
 Or point at an existing install directly:
 
@@ -47,11 +61,16 @@ Or point at an existing install directly:
 HINT
     exit 1
 fi
+PYTHON_VERSION="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+case "$PYTHON_VERSION" in
+    3.13|3.14) ;;
+    *) echo "error: Python 3.13 or 3.14 required; got $PYTHON_VERSION" >&2; exit 1 ;;
+esac
 
 echo "=== 1/4 freezing the app with PyInstaller ==="
-"$PYTHON" -m venv "$HERE/build-venv"
+"$PYTHON_BIN" -m venv "$HERE/build-venv"
 "$HERE/build-venv/bin/pip" install --upgrade pip >/dev/null
-"$HERE/build-venv/bin/pip" install PySide6==6.11.1 zeroconf==0.150.0 pyinstaller
+"$HERE/build-venv/bin/pip" install -r "$HERE/requirements-build.txt"
 
 "$HERE/build-venv/bin/pyinstaller" \
     --name ScreenMagnet \
@@ -73,15 +92,30 @@ chmod +x "$APPDIR/usr/bin/doubletake/bin/doubletake"
 
 echo "=== 3/4 desktop integration ==="
 mkdir -p "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/scalable/apps"
-cp "$REPO/app/screenmagnet.desktop" "$APPDIR/usr/share/applications/"
-cp "$REPO/app/screenmagnet.desktop" "$APPDIR/screenmagnet.desktop"
+mkdir -p "$APPDIR/usr/share/metainfo"
+cp "$HERE/screenmagnet-appimage.desktop" \
+    "$APPDIR/usr/share/applications/screenmagnet.desktop"
+cp "$HERE/screenmagnet-appimage.desktop" "$APPDIR/screenmagnet.desktop"
 cp "$REPO/app/assets/screenmagnet.svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/screenmagnet.svg"
 cp "$REPO/app/assets/screenmagnet.svg" "$APPDIR/screenmagnet.svg"
+cp "$HERE/screenmagnet.appdata.xml" "$APPDIR/usr/share/metainfo/screenmagnet.appdata.xml"
+if command -v desktop-file-validate >/dev/null 2>&1; then
+    desktop-file-validate "$APPDIR/screenmagnet.desktop"
+fi
 
 cat > "$APPDIR/AppRun" <<'EOF'
 #!/usr/bin/env bash
 HERE="$(cd "$(dirname "$(readlink -f "${0}")")" && pwd)"
-export SCREENMAGNET_DOUBLETAKE="$HERE/usr/bin/doubletake"
+# The AppImage mount/extraction directory is not guaranteed to be visible
+# inside distrobox. Keep the bundled sender in the user's shared data directory
+# so the SteamOS fallback can execute the same binary from its container.
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+RUNTIME_DIR="$DATA_HOME/screenmagnet/runtime/doubletake"
+mkdir -p "$RUNTIME_DIR/bin"
+if ! cmp -s "$HERE/usr/bin/doubletake/bin/doubletake" "$RUNTIME_DIR/bin/doubletake"; then
+    install -m755 "$HERE/usr/bin/doubletake/bin/doubletake" "$RUNTIME_DIR/bin/doubletake"
+fi
+export SCREENMAGNET_DOUBLETAKE="$RUNTIME_DIR"
 exec "$HERE/usr/bin/ScreenMagnet" "$@"
 EOF
 chmod +x "$APPDIR/AppRun"
@@ -89,9 +123,14 @@ chmod +x "$APPDIR/AppRun"
 echo "=== 4/4 packaging the AppImage ==="
 if [ ! -x "$HERE/appimagetool.AppImage" ]; then
     curl -fL -o "$HERE/appimagetool.AppImage" \
-        https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+        https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
     chmod +x "$HERE/appimagetool.AppImage"
 fi
+APPIMAGETOOL_SHA256="a6d71e2b6cd66f8e8d16c37ad164658985e0cf5fcaa950c90a482890cb9d13e0"
+echo "$APPIMAGETOOL_SHA256  $HERE/appimagetool.AppImage" | sha256sum --check --status || {
+    echo "error: appimagetool checksum mismatch; remove $HERE/appimagetool.AppImage and retry" >&2
+    exit 1
+}
 
 # --appimage-extract-and-run: appimagetool is itself an AppImage, so running it
 # normally needs libfuse.so.2. Ubuntu 22.04+ (and GitHub's ubuntu-latest runners)
@@ -99,4 +138,8 @@ fi
 # libfuse.so.2". This flag unpacks the tool and runs it directly -- no FUSE needed.
 ARCH=x86_64 "$HERE/appimagetool.AppImage" --appimage-extract-and-run \
     "$APPDIR" "$DIST/ScreenMagnet-x86_64.AppImage"
+(
+    cd "$DIST"
+    sha256sum ScreenMagnet-x86_64.AppImage > ScreenMagnet-x86_64.AppImage.sha256
+)
 echo "Built $DIST/ScreenMagnet-x86_64.AppImage"

@@ -43,10 +43,20 @@ and run it. It bundles everything — the app, the AirPlay sender, GStreamer, an
 runtime — nothing else to install first. You'll get one standard "allow this app to make
 changes" prompt; after that it's fully unattended.
 
-**Linux:** the AppImage build is working and runs in CI on every release, but no
-release has been cut yet — so there is nothing to download from Releases so far.
-Build one yourself with `packaging/linux/build-appimage.sh <doubletake-binary>`, or
-run from source (below). If
+**Linux:** the AppImage is built with its own Python runtime, PySide6, zeroconf,
+and the patched `doubletake` sender. It does not import from the host Python.
+No Linux release has been cut yet. To prepare, run, diagnose, build, or test it
+through the single launcher:
+
+```bash
+bash ./screenmagnet-linux.sh doctor
+bash ./screenmagnet-linux.sh run
+```
+
+Ubuntu 22.04 and 24.04 are the release gates. SteamOS is tested after Ubuntu;
+other glibc-based x86_64 distributions are best-effort. See
+[`docs/LINUX-RELEASE-READINESS.md`](docs/LINUX-RELEASE-READINESS.md) for the
+dependency model and exact verification matrix. If
 you're on SteamOS or another host with no H.264 GStreamer encoder available, see
 [Why a container](#why-a-container).
 
@@ -57,9 +67,10 @@ app/run.sh        # Linux
 app\run.bat        # Windows
 ```
 
-To get ScreenMagnet in your application menu and dock on Linux:
+To prepare the isolated source environment and install the application-menu entry:
 
 ```bash
+bash ./screenmagnet-linux.sh setup-source
 packaging/linux/install-desktop-entry.sh              # --uninstall to remove
 ```
 
@@ -68,11 +79,12 @@ Run it from a terminal in `app/`, or use the desktop entry above. Launching
 screenmagnet` unless the package is installed into the venv -- the plain
 `-m` form finds it via the current directory.
 
-Needs **Python 3.13 specifically** — PySide6 publishes no 3.14 wheels yet:
+Source mode supports **Python 3.13 and 3.14**. Dependencies live in a managed
+venv instead of the distribution Python. The release AppImage is frozen with
+Python 3.13 for repeatability and requires no host Python:
 
 ```bash
-python3.13 -m venv ~/.local/share/screenmagnet/venv
-~/.local/share/screenmagnet/venv/bin/pip install PySide6 zeroconf
+bash ./screenmagnet-linux.sh setup-source
 ```
 
 ```powershell
@@ -87,7 +99,8 @@ setx SCREENMAGNET_DOUBLETAKE "C:\path\to\doubletake"      # Windows, folder cont
 export SCREENMAGNET_DOUBLETAKE=/path/to/doubletake         # Linux, folder containing bin/doubletake
 ```
 
-Verify with `app/tests/smoke_test.py` — 9 checks, including live discovery on your LAN.
+Use `bash ./screenmagnet-linux.sh test` for offline packaging checks. The existing
+`app/tests/smoke_test.py` adds native encoder, monitor, and live LAN discovery checks.
 
 ## Layout
 
@@ -141,9 +154,9 @@ Windows too. It is not vendored here; `patches/` holds our changes against upstr
 - **No audio on Windows yet.** `doubletake`'s audio capture only has a Linux backend
   (PulseAudio/PipeWire monitor sources) — casting on Windows currently sends video only.
   A Windows WASAPI loopback backend is a planned follow-up.
-- **No Linux release published yet.** The AppImage builds cleanly (verified locally:
-  86 MB, bundles doubletake and the frozen Qt app) and the release workflow builds it
-  on `ubuntu-latest`, but no tag has been pushed, so Releases has no Linux artefact yet.
+- **No Linux release published yet.** The AppImage bundles `doubletake` and the frozen
+  Qt app. Packaging CI builds it on Ubuntu 22.04 and validates that same artifact on
+  Ubuntu 24.04, but a tag must wait for the manual cast gates in the Linux release guide.
 
 ## Latency
 

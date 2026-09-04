@@ -8,7 +8,7 @@
 set -euo pipefail
 
 UPSTREAM="https://github.com/omarroth/doubletake.git"
-COMMIT="8ccea5f"                       # patches/ are cut against this
+COMMIT="8ccea5fb2a72765502f351595765812030efed5d"  # patches/ are cut against this
 GO_MIN="1.25.0"                        # doubletake's go.mod
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

@@ -98,7 +98,8 @@ cp "$HERE/screenmagnet-appimage.desktop" \
 cp "$HERE/screenmagnet-appimage.desktop" "$APPDIR/screenmagnet.desktop"
 cp "$REPO/app/assets/screenmagnet.svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/screenmagnet.svg"
 cp "$REPO/app/assets/screenmagnet.svg" "$APPDIR/screenmagnet.svg"
-cp "$HERE/screenmagnet.appdata.xml" "$APPDIR/usr/share/metainfo/screenmagnet.appdata.xml"
+cp "$HERE/io.github.DMoneyManZ.ScreenMagnet.metainfo.xml" \
+    "$APPDIR/usr/share/metainfo/io.github.DMoneyManZ.ScreenMagnet.metainfo.xml"
 if command -v desktop-file-validate >/dev/null 2>&1; then
     desktop-file-validate "$APPDIR/screenmagnet.desktop"
 fi

@@ -29,7 +29,7 @@ test -x "$ROOT/usr/bin/ScreenMagnet"
 test -x "$ROOT/usr/bin/doubletake/bin/doubletake"
 test -f "$ROOT/screenmagnet.desktop"
 test -f "$ROOT/screenmagnet.svg"
-test -f "$ROOT/usr/share/metainfo/screenmagnet.appdata.xml"
+test -f "$ROOT/usr/share/metainfo/io.github.DMoneyManZ.ScreenMagnet.metainfo.xml"
 
 if grep -Eq '@EXEC@|@WORKDIR@' "$ROOT/screenmagnet.desktop"; then
     echo "error: unresolved desktop-entry template token" >&2

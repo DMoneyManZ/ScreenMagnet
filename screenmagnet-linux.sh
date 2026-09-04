@@ -132,7 +132,7 @@ install_native_deps() {
                 curl git x11-xserver-utils \
                 libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
                 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 \
-                libxcb-util1 libxcb-xkb1 \
+                libxcb-shape0 libxcb-util1 libxcb-xkb1 \
                 gstreamer1.0-tools gstreamer1.0-plugins-base \
                 gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
                 gstreamer1.0-plugins-ugly

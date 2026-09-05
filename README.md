@@ -43,7 +43,28 @@ and run it. It bundles everything — the app, the AirPlay sender, GStreamer, an
 runtime — nothing else to install first. You'll get one standard "allow this app to make
 changes" prompt; after that it's fully unattended.
 
-**Linux:** an AppImage is planned but not built yet — for now, run from source (below). If
+**Linux:** the AppImage is built with its own Python runtime, PySide6, zeroconf,
+and the patched `doubletake` sender. It does not import from the host Python.
+No Linux release has been cut yet. To prepare, run, diagnose, build, or test it
+through the single launcher:
+
+```bash
+bash ./screenmagnet-linux.sh doctor
+bash ./screenmagnet-linux.sh run
+```
+
+On SteamOS — or any host with no H.264 GStreamer encoder — add the container
+fallback first. It creates the box, installs GStreamer into it, and does not
+return until it has proved the container can actually encode:
+
+```bash
+bash ./screenmagnet-linux.sh setup-steamos    # a few minutes, once
+```
+
+Ubuntu 22.04 and 24.04 are the release gates. SteamOS is tested after Ubuntu;
+other glibc-based x86_64 distributions are best-effort. See
+[`docs/LINUX-RELEASE-READINESS.md`](docs/LINUX-RELEASE-READINESS.md) for the
+dependency model and exact verification matrix. If
 you're on SteamOS or another host with no H.264 GStreamer encoder available, see
 [Why a container](#why-a-container).
 
@@ -54,11 +75,24 @@ app/run.sh        # Linux
 app\run.bat        # Windows
 ```
 
-Needs **Python 3.13 specifically** — PySide6 publishes no 3.14 wheels yet:
+To prepare the isolated source environment and install the application-menu entry:
 
 ```bash
-python3.13 -m venv ~/.local/share/screenmagnet/venv
-~/.local/share/screenmagnet/venv/bin/pip install PySide6 zeroconf
+bash ./screenmagnet-linux.sh setup-source
+packaging/linux/install-desktop-entry.sh              # --uninstall to remove
+```
+
+Run it from a terminal in `app/`, or use the desktop entry above. Launching
+`python -m screenmagnet` from anywhere else fails with `No module named
+screenmagnet` unless the package is installed into the venv -- the plain
+`-m` form finds it via the current directory.
+
+Source mode supports **Python 3.13 and 3.14**. Dependencies live in a managed
+venv instead of the distribution Python. The release AppImage is frozen with
+Python 3.13 for repeatability and requires no host Python:
+
+```bash
+bash ./screenmagnet-linux.sh setup-source
 ```
 
 ```powershell
@@ -73,7 +107,8 @@ setx SCREENMAGNET_DOUBLETAKE "C:\path\to\doubletake"      # Windows, folder cont
 export SCREENMAGNET_DOUBLETAKE=/path/to/doubletake         # Linux, folder containing bin/doubletake
 ```
 
-Verify with `app/tests/smoke_test.py` — 9 checks, including live discovery on your LAN.
+Use `bash ./screenmagnet-linux.sh test` for offline packaging checks. The existing
+`app/tests/smoke_test.py` adds native encoder, monitor, and live LAN discovery checks.
 
 ## Layout
 
@@ -105,6 +140,7 @@ GStreamer just has no path to it without the container.
 
 `xorg-xrandr` must be installed inside the container too. Without it the sender silently
 falls back to capturing every monitor at once and squashing them into the TV.
+`setup-steamos` installs it and refuses to report success if it is absent.
 
 ## The engine
 
@@ -120,13 +156,16 @@ Windows too. It is not vendored here; `patches/` holds our changes against upstr
 | `-key-int` | Keyframe interval, for latency experiments. |
 | Windows capture backend | `d3d11screencapturesrc` / DXGI Desktop Duplication, streamed over a loopback TCP socket instead of stdout (Windows' text-mode stdio otherwise corrupts the binary stream). |
 | Real encoder probing | `-hwaccel auto` used to pick whatever encoder's element factory was *registered*, regardless of whether the hardware was actually present — killing the pipeline on its first frame (observed: NVENC selected on an AMD box). It now probes by encoding two real test frames first. |
+| Muted at session setup | Setup sent `volume: 20`, but AirPlay volume is decibels and **0 is the maximum** — 20 dB above it, so receivers clamped to full and every cast slammed the TV to 100% on connect. Now starts at `-144` (muted); callers raise it deliberately. |
 
 ## Known limitations
 
 - **No audio on Windows yet.** `doubletake`'s audio capture only has a Linux backend
   (PulseAudio/PipeWire monitor sources) — casting on Windows currently sends video only.
   A Windows WASAPI loopback backend is a planned follow-up.
-- **Linux AppImage not built yet** — run from source for now.
+- **No Linux release published yet.** The AppImage bundles `doubletake` and the frozen
+  Qt app. Packaging CI builds it on Ubuntu 22.04 and validates that same artifact on
+  Ubuntu 24.04, but a tag must wait for the manual cast gates in the Linux release guide.
 
 ## Latency
 

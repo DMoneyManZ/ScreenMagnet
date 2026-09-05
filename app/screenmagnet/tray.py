@@ -2,22 +2,12 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
-from PySide6 import QtSvg  # noqa: F401 -- side-effect import: registers the SVG
-# icon-engine plugin (qsvgicon). Without this, QIcon(path/to/*.svg) silently
-# returns a null icon on this PySide6 build and app_icon() falls through to
-# the hand-drawn placeholder pixmap instead of the real logo.
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import (
     QAction,
-    QColor,
     QCursor,
     QGuiApplication,
     QIcon,
-    QPainter,
-    QPixmap,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -37,6 +27,8 @@ from PySide6.QtWidgets import (
 
 from . import startup, updater
 from .caster import Caster, preflight
+from .appicon import app_icon
+from .config import CONFIG, load_config, save_config
 from .discovery import DiscoveryThread, Screen
 from .monitors import list_monitors
 from .settings_window import SettingsWindow
@@ -59,23 +51,6 @@ UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000  # 6 hours
 UPDATE_CHECK_STARTUP_DELAY_MS = 5_000  # let discovery/caster settle first
 
 APP_NAME = "ScreenMagnet"
-CONFIG = Path.home() / ".config/screenmagnet/config.json"
-ASSETS = Path(__file__).resolve().parent.parent / "assets"
-
-
-def load_config() -> dict:
-    try:
-        return json.loads(CONFIG.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def save_config(data: dict) -> None:
-    try:
-        CONFIG.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG.write_text(json.dumps(data, indent=2))
-    except OSError:
-        pass
 
 
 def _prepare_extend_display(side: str) -> tuple[str, str | None]:
@@ -100,33 +75,6 @@ def _prepare_extend_display(side: str) -> tuple[str, str | None]:
     if not name:
         return "not_attached", None
     return "ready", name
-
-
-def app_icon() -> QIcon:
-    """A screen glyph. Prefers the shipped SVG, falls back to a drawn pixmap."""
-    svg = ASSETS / "screenmagnet.svg"
-    if svg.exists():
-        icon = QIcon(str(svg))
-        if not icon.isNull():
-            return icon
-    themed = QIcon.fromTheme("video-display")
-    if not themed.isNull():
-        return themed
-
-    pm = QPixmap(64, 64)
-    pm.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor("#dcdcdc"))
-    p.drawRoundedRect(6, 12, 52, 34, 5, 5)
-    p.setBrush(QColor("#2c2c2c"))
-    p.drawRoundedRect(10, 16, 44, 26, 3, 3)
-    p.setBrush(QColor("#dcdcdc"))
-    p.drawRect(26, 46, 12, 6)
-    p.drawRoundedRect(18, 52, 28, 5, 2, 2)
-    p.end()
-    return QIcon(pm)
 
 
 class ScreenRow(QPushButton):
@@ -691,9 +639,15 @@ class ScreenMagnetTray(QSystemTrayIcon):
             self.panel.set_status("Stopped.")
 
     # -- settings window -------------------------------------------------
+    def _on_icon_theme_changed(self, name: str) -> None:
+        """Repaint the live tray icon when the setting changes -- the icon is
+        already persisted by the settings window."""
+        self.setIcon(app_icon(name))
+
     def open_settings(self):
         if self.settings_window is None:
             self.settings_window = SettingsWindow()
+            self.settings_window.icon_theme_changed.connect(self._on_icon_theme_changed)
             self.settings_window.check_for_updates_requested.connect(self.check_for_updates)
             self.settings_window.update_now_requested.connect(self.update_now)
             # Native QCheckBox signal, per settings_window.py's own docs.

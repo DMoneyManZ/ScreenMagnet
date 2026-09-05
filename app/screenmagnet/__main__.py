@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import signal
+import subprocess
 import sys
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
-from . import startup, updater
+from . import __version__, startup, updater
 from .settings_window import APP_NAME, SettingsWindow
 
 # ScreenMagnetTray is imported lazily, inside main()'s tray-launch branch --
@@ -101,7 +102,46 @@ def _run_settings_only(argv: list[str]) -> int:
     return app.exec()
 
 
+def _run_self_test() -> int:
+    """Exercise the frozen runtime without requiring a tray or AirPlay target."""
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+    from .appicon import app_icon
+    from .caster import BINARY
+    from .discovery import _is_ipv4
+    from .spinner import ChasingArrows
+
+    app = QApplication.instance() or QApplication([APP_NAME, "--self-test"])
+    assert not app_icon().isNull(), "application icon could not be rendered"
+    assert _is_ipv4("192.0.2.24"), "IPv4 discovery filter failed"
+
+    spinner = ChasingArrows()
+    spinner.start()
+    spinner.stop()
+
+    if not BINARY.is_file():
+        raise RuntimeError(f"doubletake binary missing at {BINARY}")
+    result = subprocess.run(
+        [str(BINARY), "--help"], capture_output=True, text=True, timeout=30
+    )
+    help_text = result.stdout + result.stderr
+    required = ("-monitor", "-target", "-hwaccel", "-pin", "-playout-floor-ms")
+    missing = [flag for flag in required if flag not in help_text]
+    if missing:
+        raise RuntimeError("doubletake is missing required flags: " + ", ".join(missing))
+
+    print(f"{APP_NAME} {__version__}: self-test passed")
+    return 0
+
+
 def main() -> int:
+    if "--version" in sys.argv[1:]:
+        print(f"{APP_NAME} {__version__}")
+        return 0
+    if "--self-test" in sys.argv[1:]:
+        return _run_self_test()
     if "--settings" in sys.argv[1:]:
         return _run_settings_only([a for a in sys.argv if a != "--settings"])
 

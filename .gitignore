@@ -44,3 +44,6 @@ packaging/linux/frozen/
 packaging/linux/build-venv/
 packaging/linux/appimagetool.AppImage
 packaging/linux/*.spec
+
+# editable-install metadata
+*.egg-info/

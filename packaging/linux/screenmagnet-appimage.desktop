@@ -1,13 +1,9 @@
 [Desktop Entry]
-# Template. Absolute paths are substituted by packaging/linux/install-desktop-entry.sh
-# -- desktop entries cannot use relative paths, and the repo cannot know where it
-# was checked out.
 Type=Application
 Name=ScreenMagnet
 GenericName=Screen Caster
 Comment=Cast this machine's screen to a TV
-Exec=bash "@EXEC@" run-source
-Path=@WORKDIR@
+Exec=ScreenMagnet
 Icon=screenmagnet
 Terminal=false
 Categories=AudioVideo;

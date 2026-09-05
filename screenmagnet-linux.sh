@@ -9,6 +9,14 @@ DOUBLETAKE_DIR="${SCREENMAGNET_DOUBLETAKE:-$DATA_HOME/screenmagnet/doubletake}"
 APPIMAGE_DEFAULT="$ROOT/packaging/linux/dist/ScreenMagnet-x86_64.AppImage"
 APPIMAGE="${SCREENMAGNET_APPIMAGE:-$APPIMAGE_DEFAULT}"
 
+# Must match caster.py's CONTAINER, or the app looks for a box setup-steamos never made.
+CONTAINER="${SCREENMAGNET_CONTAINER:-screenmagnet}"
+CONTAINER_IMAGE="ubuntu:24.04"
+CONTAINER_PACKAGES="gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly x11-xserver-utils"
+# Written only once the container has been proven able to encode -- see setup_steamos.
+CONTAINER_STAMP="$DATA_HOME/screenmagnet/container-verified"
+ENCODERS="x264enc openh264enc vah264enc vaapih264enc"
+
 say() { printf '\n== %s\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -62,10 +70,36 @@ has_fuse2() {
 has_encoder() {
     have gst-inspect-1.0 || return 1
     local encoder
-    for encoder in x264enc openh264enc vah264enc vaapih264enc; do
+    for encoder in $ENCODERS; do
         gst-inspect-1.0 "$encoder" >/dev/null 2>&1 && return 0
     done
     return 1
+}
+
+container_exists() {
+    have distrobox || return 1
+    distrobox list 2>/dev/null | awk -F'|' -v name="$CONTAINER" '
+        NR > 1 {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
+            if ($2 == name) { found = 1 }
+        }
+        END { exit !found }'
+}
+
+# Prints the H.264 encoders present inside the container, one per line.
+#
+# Entering a container for the first time is what makes distrobox install
+# --additional-packages, which takes minutes -- so this belongs in setup-steamos
+# and must never be called from doctor, which promises not to change anything.
+container_encoders() {
+    # The trailing `exit 0` matters: without it the inner script exits with the
+    # status of the *last* encoder test, so a container that has x264enc but not
+    # vaapih264enc -- the normal case -- reports failure.
+    distrobox enter "$CONTAINER" -- env ENCODERS="$ENCODERS" bash -lc '
+        for e in $ENCODERS; do
+            gst-inspect-1.0 "$e" >/dev/null 2>&1 && echo "$e"
+        done
+        exit 0' 2>/dev/null
 }
 
 doctor() {
@@ -97,10 +131,16 @@ doctor() {
 
     if have gst-launch-1.0 && has_encoder; then
         echo '[ok] native GStreamer and an H.264 encoder available'
-    elif have distrobox && distrobox list 2>/dev/null | grep -q 'screenmagnet'; then
-        echo '[ok] ScreenMagnet distrobox fallback available'
+    elif container_exists && [ -f "$CONTAINER_STAMP" ]; then
+        echo "[ok] verified '$CONTAINER' distrobox fallback"
+    elif container_exists; then
+        # Created but never warmed up: the packages install on first enter, so
+        # the box can exist for minutes with no encoder in it. Reporting this as
+        # ok sends people to a cast that fails.
+        echo "[warn] '$CONTAINER' distrobox exists but is unverified; run: setup-steamos"
+        failed=1
     else
-        echo '[missing] install native GStreamer plugins or create the screenmagnet distrobox'
+        echo "[missing] install native GStreamer plugins, or run: setup-steamos"
         failed=1
     fi
 
@@ -170,13 +210,47 @@ setup_steamos() {
         echo 'distrobox is required on SteamOS. Install it, then rerun setup-steamos.' >&2
         return 1
     }
-    if distrobox list 2>/dev/null | grep -q 'screenmagnet'; then
-        echo 'The screenmagnet distrobox already exists.'
-        return
+
+    if container_exists; then
+        say "Reusing the existing '$CONTAINER' distrobox"
+    else
+        say "Creating '$CONTAINER' from $CONTAINER_IMAGE"
+        distrobox create --yes --name "$CONTAINER" --image "$CONTAINER_IMAGE" \
+            --additional-packages "$CONTAINER_PACKAGES"
     fi
-    distrobox create --yes --name screenmagnet --image ubuntu:24.04 \
-        --additional-packages \
-        "gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly x11-xserver-utils"
+
+    # distrobox defers --additional-packages to the container's first enter, so
+    # `create` returning success means "exists", not "can encode". Warming it up
+    # here is what lets setup-steamos promise the latter. Minutes, once.
+    say 'Initialising the container (first run installs GStreamer -- takes a few minutes)'
+    distrobox enter "$CONTAINER" -- true
+
+    say 'Verifying the container can encode'
+    local found=""
+    found="$(container_encoders | tr '\n' ' ')" || found=""
+    found="${found% }"
+    if [ -z "$found" ]; then
+        echo "No H.264 encoder inside '$CONTAINER' after setup -- it cannot cast." >&2
+        echo "Inspect with: distrobox enter $CONTAINER -- gst-inspect-1.0 x264enc" >&2
+        return 1
+    fi
+    printf '   encoders: %s\n' "$found"
+
+    # Without xrandr the sender silently falls back to capturing every monitor
+    # at once and squashing them all into the TV.
+    # `command` is a shell builtin, so this needs a shell inside the container --
+    # `distrobox enter -- command -v xrandr` looks for a binary called "command".
+    if distrobox enter "$CONTAINER" -- bash -lc 'command -v xrandr' >/dev/null 2>&1; then
+        echo '   xrandr:   present'
+    else
+        echo "   xrandr:   MISSING -- casts would squash every monitor into one" >&2
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$CONTAINER_STAMP")"
+    printf 'container=%s\nimage=%s\nencoders=%s\nverified=%s\n' \
+        "$CONTAINER" "$CONTAINER_IMAGE" "$found" "$(date -Is)" > "$CONTAINER_STAMP"
+    say "'$CONTAINER' is ready to cast"
 }
 
 setup_source() {

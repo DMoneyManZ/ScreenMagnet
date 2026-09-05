@@ -53,6 +53,14 @@ bash ./screenmagnet-linux.sh doctor
 bash ./screenmagnet-linux.sh run
 ```
 
+On SteamOS — or any host with no H.264 GStreamer encoder — add the container
+fallback first. It creates the box, installs GStreamer into it, and does not
+return until it has proved the container can actually encode:
+
+```bash
+bash ./screenmagnet-linux.sh setup-steamos    # a few minutes, once
+```
+
 Ubuntu 22.04 and 24.04 are the release gates. SteamOS is tested after Ubuntu;
 other glibc-based x86_64 distributions are best-effort. See
 [`docs/LINUX-RELEASE-READINESS.md`](docs/LINUX-RELEASE-READINESS.md) for the
@@ -132,6 +140,7 @@ GStreamer just has no path to it without the container.
 
 `xorg-xrandr` must be installed inside the container too. Without it the sender silently
 falls back to capturing every monitor at once and squashing them into the TV.
+`setup-steamos` installs it and refuses to report success if it is absent.
 
 ## The engine
 

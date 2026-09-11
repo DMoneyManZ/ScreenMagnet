@@ -76,7 +76,9 @@ hardware validation. The self-test uses synthetic video only and never casts.
 
 ScreenMagnet-Setup.exe is an ONLINE installer. It downloads missing prerequisites
 directly from GStreamer and Microsoft (about 900 MB on a clean machine), then
-checks the release-pinned SHA-256 and Authenticode signature before running them.
+checks release-pinned SHA-256 hashes before running them. GStreamer's unsigned
+installer must match its reviewed official checksum; the Microsoft runtime must
+also have a valid Authenticode signature.
 An internet connection and administrator approval are required for setup.
 Third-party installers are not included in this archive or installer.
 

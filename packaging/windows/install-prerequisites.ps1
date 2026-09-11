@@ -1,8 +1,9 @@
 <#
 CI: -ManifestOutput PATH -DownloadDirectory PATH [-Install]
 Setup: -ManifestPath PATH -DownloadDirectory PATH -Install [-LogPath PATH]
-Only CI creates the manifest. End-user downloads must match its SHA-256 values
-and have a valid Windows Authenticode signature before any execution.
+Only CI creates the manifest. GStreamer must match the reviewed upstream SHA-256;
+CI also compares its published checksum. VC++ must have valid Authenticode.
+End-user downloads must additionally match the manifest before any execution.
 #>
 [CmdletBinding(DefaultParameterSetName = 'Install')]
 param(
@@ -49,14 +50,44 @@ function Receive-OfficialFile([string]$Url, [string]$Destination, [string]$Id) {
     } finally { $client.Dispose() }
 }
 
-function Assert-VerifiedInstaller([string]$Path, [string]$ExpectedHash) {
+function Get-GStreamerRelease {
+    # Reviewed official .exe.sha256sum; updates require reviewing this pin.
+    # The upstream EXE is not Authenticode signed. See PREREQUISITE-VERIFICATION.md.
+    return [ordered]@{
+        url = 'https://gstreamer.freedesktop.org/data/pkg/windows/1.28.5/msvc/gstreamer-1.0-msvc-x86_64-1.28.5.exe'
+        sha256 = '51ee5eaec33008e8409d8cf6f6884457f22aa3bd515f8856f993a3eaab903530'
+        version = '1.28.5'
+    }
+}
+
+function Assert-OfficialGStreamerChecksum([string]$Path) {
+    $release = Get-GStreamerRelease
+    $filename = [System.IO.Path]::GetFileName(([Uri]$release.url).AbsolutePath)
+    $text = (Get-Content -LiteralPath $Path -Raw).Trim()
+    if ($text -notmatch ('\A([a-fA-F0-9]{64}) [ *]' + [Regex]::Escape($filename) + '\z')) {
+        throw 'Unexpected official GStreamer checksum format or filename.'
+    }
+    if ($Matches[1].ToLowerInvariant() -ne $release.sha256) {
+        throw 'Published checksum differs from the reviewed GStreamer release. Nothing was executed.'
+    }
+}
+
+function Assert-VerifiedInstaller([string]$Path, [string]$ExpectedHash, [string]$Id) {
+    if ($Id -eq 'gstreamer') {
+        $release = Get-GStreamerRelease
+        if ($ExpectedHash -ne $release.sha256) {
+            throw 'Manifest does not match the pinned GStreamer release. Nothing was executed.'
+        }
+    } elseif ($Id -ne 'vcredist') { throw "Unknown prerequisite: $Id" }
     $hash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($ExpectedHash -and $hash -ne $ExpectedHash.ToLowerInvariant()) {
         throw "SHA-256 mismatch for $Path. The prerequisite was not executed."
     }
-    $signature = Get-AuthenticodeSignature -LiteralPath $Path
-    if ($signature.Status -ne 'Valid') {
-        throw "Authenticode verification failed for ${Path}: $($signature.Status). The prerequisite was not executed."
+    if ($Id -eq 'vcredist') {
+        $signature = Get-AuthenticodeSignature -LiteralPath $Path
+        if ($signature.Status -ne 'Valid') {
+            throw "Authenticode verification failed for ${Path}: $($signature.Status). The prerequisite was not executed."
+        }
     }
     return $hash
 }
@@ -104,10 +135,7 @@ try {
     if ($preparing) {
         $manifest = [ordered]@{
             schema_version = 1
-            gstreamer = [ordered]@{
-                url = 'https://gstreamer.freedesktop.org/data/pkg/windows/1.28.5/msvc/gstreamer-1.0-msvc-x86_64-1.28.5.exe'
-                sha256 = ''; version = '1.28.5'
-            }
+            gstreamer = Get-GStreamerRelease
             vcredist = [ordered]@{ url = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'; sha256 = ''; version = '' }
         }
     } else {
@@ -121,6 +149,17 @@ try {
         if (!$preparing -and $entry.sha256 -notmatch '^[a-fA-F0-9]{64}$') {
             throw "Missing or invalid pinned SHA-256 for $id."
         }
+        if ($id -eq 'gstreamer') {
+            $release = Get-GStreamerRelease
+            if ($entry.url -ne $release.url -or $entry.sha256 -ne $release.sha256 -or $entry.version -ne $release.version) {
+                throw 'Manifest does not match the pinned GStreamer release.'
+            }
+            if ($preparing) {
+                $checksumPath = Join-Path $DownloadDirectory 'gstreamer.exe.sha256sum'
+                $null = Receive-OfficialFile ($release.url + '.sha256sum') $checksumPath $id
+                Assert-OfficialGStreamerChecksum $checksumPath
+            }
+        }
         $alreadyInstalled = if ($id -eq 'gstreamer') { [bool](Find-GStreamer) } else {
             if ($entry.version) { Test-VcRuntime $entry.version } else { $false }
         }
@@ -131,9 +170,11 @@ try {
         $path = Join-Path $DownloadDirectory "$id.exe"
         Write-Host "Downloading $id from its official publisher..."
         $resolved = Receive-OfficialFile $entry.url $path $id
-        $hash = Assert-VerifiedInstaller $path $entry.sha256
+        $hash = Assert-VerifiedInstaller $path $entry.sha256 $id
         if ($preparing) {
-            $entry.url = $resolved
+            # GStreamer's versioned URL is pinned above; VC++ aka.ms resolves to
+            # an immutable publisher URL for the release manifest.
+            if ($id -eq 'vcredist') { $entry.url = $resolved }
             $entry.sha256 = $hash
             if ($id -eq 'vcredist') {
                 $productVersion = (Get-Item -LiteralPath $path).VersionInfo.ProductVersion

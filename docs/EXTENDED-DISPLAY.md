@@ -9,11 +9,6 @@ Obtain the driver from upstream and follow that release's installation
 instructions; driver installation requires Windows administrator approval.
 Restart ScreenMagnet afterward. Mirror casting does not require this driver.
 
-The historical `packaging/windows/vendor/VirtualDisplayDriver-installer.zip`
-remains in the repository for reference, but it is excluded from current release
-packages and is not the app's installation route. See the
-[vendor provenance notes](../packaging/windows/vendor/README.md).
-
 ### What has and has not been established
 
 Earlier development notes recorded read-only checks of `is_installed()`,

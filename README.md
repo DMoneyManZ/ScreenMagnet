@@ -12,8 +12,9 @@ Click the tray icon → two arrows chase each other while it scans → your scre
 name → click one. If the TV wants a pairing code, a box appears inline. Pick which monitor
 goes to the TV if you have more than one.
 
-**Status: release-readiness preview (0.84).** Linux has a verified AppImage build.
-Windows packaging is being rebuilt from matching sender source. Real receiver,
+**Status: release-readiness preview (0.84).** Windows setup and Linux AppImage
+packages build from matching sender source. Windows installation, native startup,
+synthetic video encoding and removal have passed automated checks. Real receiver,
 pairing, audio and multi-monitor checks remain required for the new packages.
 The earlier measured Linux cast achieved 1920×1080 at 30 fps with audio and
 roughly 1 second of end-to-end latency; that is one measured setup, not a promise
@@ -54,7 +55,8 @@ installation, capture dependencies, updates, and removal.
   The installer does not unlock or modify an immutable host OS.
 
 Preview packages are staged as draft releases during readiness review. There is
-no public stable release yet. Python/Qt and source/license materials are included;
+no public stable release yet. Python/Qt and original license notices are included;
+Linux corresponding sources are a matching companion download on the release page.
 Linux GStreamer/capture integration remains an external dependency.
 
 ## Running from source
@@ -111,10 +113,10 @@ app/                    the PySide6 tray application
     caster.py            drives the AirPlay sender, parses its state
   tests/smoke_test.py    9 checks incl. live discovery
   run.sh / run.bat
-docs/                    measured research findings
+docs/                    installation and verification guides
 patches/                 our fixes to the AirPlay sender (see below)
 packaging/               installer build scripts (PyInstaller + Inno Setup)
-spike/                   build scripts + the latency measuring tool
+spike/                   latency measurement tool
 ```
 
 ## Why a container

@@ -105,7 +105,37 @@ def _run_settings_only(argv: list[str]) -> int:
     return app.exec()
 
 
-def _self_test_checks() -> dict:
+def _check_linux_capture_runtime(environment: dict[str, str]) -> dict:
+    """Explicit, bounded host GStreamer check; synthetic frames never leave fakesink."""
+    import shutil
+
+    inspect = shutil.which('gst-inspect-1.0', path=environment.get('PATH', ''))
+    launch = shutil.which('gst-launch-1.0', path=environment.get('PATH', ''))
+    if not inspect or not launch:
+        raise RuntimeError('GStreamer tools are required for --require-capture-runtime.')
+    plugins = ('videotestsrc', 'videoconvert', 'x264enc', 'h264parse', 'fakesink')
+    with tempfile.TemporaryDirectory(prefix='screenmagnet-linux-encode-test-') as directory:
+        environment = dict(environment)
+        environment['GST_REGISTRY_1_0'] = str(Path(directory) / 'registry.bin')
+        for plugin in plugins:
+            result = subprocess.run([inspect, plugin], capture_output=True, text=True,
+                                    timeout=15, cwd=directory, env=environment)
+            if result.returncode:
+                raise RuntimeError(f'GStreamer plugin unavailable: {plugin}: {result.stderr[-500:]}')
+        result = subprocess.run([
+            launch, '-q', 'videotestsrc', 'num-buffers=8', 'pattern=black',
+            '!', 'video/x-raw,width=320,height=240,framerate=30/1',
+            '!', 'videoconvert', '!', 'x264enc', 'tune=zerolatency',
+            'speed-preset=ultrafast', '!', 'h264parse', '!', 'fakesink', 'sync=false',
+        ], capture_output=True, text=True, timeout=30, cwd=directory, env=environment)
+        if result.returncode:
+            raise RuntimeError(f'Synthetic H.264 encode failed: {result.stderr[-1000:]}')
+    return {'capture_runtime_checked': True, 'gstreamer_plugins': list(plugins),
+            'synthetic_video_encode': True, 'real_capture_tested': False,
+            'airplay_receiver_tested': False}
+
+
+def _self_test_checks(require_capture_runtime: bool = False) -> dict:
     """Exercise the frozen runtime without requiring a tray or AirPlay target."""
     import os
 
@@ -144,7 +174,8 @@ def _self_test_checks() -> dict:
     if missing:
         raise RuntimeError("doubletake is missing required flags: " + ", ".join(missing))
     report = {'qt_platform': app.platformName(), 'icon_rendered': True,
-              'sender_help_checked': True, 'screen_count': len(app.screens())}
+              'sender_help_checked': True, 'screen_count': len(app.screens()),
+              'capture_runtime_checked': False}
     if sys.platform == 'win32':
         problems = preflight()
         if problems:
@@ -180,20 +211,24 @@ def _self_test_checks() -> dict:
                     env=environment, creationflags=subprocess.CREATE_NO_WINDOW)
                 if result.returncode:
                     raise RuntimeError(f'Synthetic H.264 encode failed: {result.stderr[-1000:]}')
-        report.update(preflight=True, gstreamer_version=version_match.group(0),
+        report.update(preflight=True, capture_runtime_checked=True, gstreamer_version=version_match.group(0),
                       gstreamer_plugins=list(plugins), synthetic_video_encode=True,
                       real_capture_tested=False, airplay_receiver_tested=False,
                       preview_note='Reconstructed Windows capture/audio; real TV validation remains pending.')
+    elif require_capture_runtime:
+        if not sys.platform.startswith('linux'):
+            raise RuntimeError('--require-capture-runtime is supported on Linux and Windows.')
+        report.update(_check_linux_capture_runtime(environment))
     spinner.deleteLater()
     app.processEvents()
     return report
 
 
-def _run_self_test(report_path: Path | None = None) -> int:
+def _run_self_test(report_path: Path | None = None, require_capture_runtime: bool = False) -> int:
     """Always return a bounded result, including when the report cannot be saved."""
     report = {'version': __version__, 'platform': sys.platform, 'passed': False}
     try:
-        report.update(_self_test_checks())
+        report.update(_self_test_checks(require_capture_runtime=require_capture_runtime))
         report['passed'] = True
     except Exception as exc:
         report['error'] = f'{type(exc).__name__}: {exc}'
@@ -227,8 +262,10 @@ def main() -> int:
         parser = argparse.ArgumentParser(description='Bounded ScreenMagnet runtime check; no screen capture or casting.')
         parser.add_argument('--self-test', action='store_true')
         parser.add_argument('--report', type=Path)
+        parser.add_argument('--require-capture-runtime', action='store_true',
+                            help='Also verify host GStreamer plugins and encode synthetic video; never capture or cast.')
         args = parser.parse_args()
-        return _run_self_test(args.report)
+        return _run_self_test(args.report, require_capture_runtime=args.require_capture_runtime)
     if "--settings" in sys.argv[1:]:
         return _run_settings_only([a for a in sys.argv if a != "--settings"])
 

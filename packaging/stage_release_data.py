@@ -31,12 +31,14 @@ SKIP_DIRS = {'.git', '.venv', '__pycache__', 'build', 'dist', 'bin', 'logs',
              'frozen', 'appdir', 'output', 'prereqs', 'runtime-cache'}
 SKIP_SUFFIXES = {'.exe', '.dll', '.so', '.dylib', '.o', '.a', '.pyc', '.pyd',
                  '.log', '.key', '.pem', '.zip', '.7z', '.msi', '.msix'}
+CODE_SUFFIXES = {'.go', '.py', '.c', '.h', '.s', '.cc', '.cpp', '.inc', '.asm'}
 
 
 def excluded(relative):
     return (any(p.lower() in SKIP_DIRS or p.startswith('.') or p.endswith('.egg-info') for p in relative.parts)
             or relative.suffix.lower() in SKIP_SUFFIXES
-            or relative.name.lower().startswith(('credentials', 'secrets', 'token.')))
+            or (relative.name.lower().startswith(('credentials', 'secrets', 'token.'))
+                and relative.suffix.lower() not in CODE_SUFFIXES))
 
 
 def selected_tree(root, folder, suffixes=None):
@@ -130,6 +132,21 @@ def write_source_archive(root, files, destination, prefix):
             info.uname = info.gname = ''
             with path.open('rb') as source:
                 archive.addfile(info, source)
+
+
+def verify_sender_source_archive(archive_path):
+    """Compile the distributed source itself so privacy filters cannot omit code."""
+    with tempfile.TemporaryDirectory(prefix='screenmagnet-source-rebuild-') as temporary:
+        root = Path(temporary)
+        with tarfile.open(archive_path) as archive:
+            archive.extractall(root, filter='data')
+        result = subprocess.run(
+            ['go', 'build', '-mod=vendor', '-buildvcs=false', '-trimpath',
+             '-o', str(root / 'sender-rebuild'), './cmd/doubletake'],
+            cwd=root / 'DoubleTake', env=dict(os.environ, CGO_ENABLED='0'),
+            capture_output=True, text=True, timeout=180)
+        if result.returncode:
+            raise ValueError('Distributed sender source does not rebuild: ' + result.stderr[-3000:])
 
 
 def safe_member(name):
@@ -271,6 +288,7 @@ def stage_release(doubletake, output):
         go_archive = stage / 'source/DoubleTake-patched-source.tar.gz'
         write_source_archive(ROOT, app_files, app_archive, 'ScreenMagnet')
         write_source_archive(doubletake, go_files, go_archive, 'DoubleTake')
+        verify_sender_source_archive(go_archive)
         extract_notices(app_archive, stage / 'licenses/screenmagnet')
         extract_notices(go_archive, stage / 'licenses/doubletake')
         (stage / 'licenses/go').mkdir()

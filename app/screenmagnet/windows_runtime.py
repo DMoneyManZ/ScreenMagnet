@@ -63,11 +63,19 @@ def gstreamer_bin() -> Path | None:
 
 
 def child_environment() -> dict[str, str]:
+    """Use host libraries for external tools, leaving the Qt process untouched."""
     environment = dict(os.environ)
     if IS_WINDOWS:
         directory = gstreamer_bin()
         if directory:
             environment['PATH'] = str(directory) + os.pathsep + environment.get('PATH', '')
+    elif sys.platform.startswith('linux') and getattr(sys, 'frozen', False):
+        # PyInstaller prepends _MEIPASS to the parent process's search path.
+        # Host GStreamer (and the sender's descendants) need their own ABI.
+        if 'LD_LIBRARY_PATH_ORIG' in environment:
+            environment['LD_LIBRARY_PATH'] = environment['LD_LIBRARY_PATH_ORIG']
+        else:
+            environment.pop('LD_LIBRARY_PATH', None)
     return environment
 
 

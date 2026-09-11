@@ -63,6 +63,7 @@ class ReleaseData(unittest.TestCase):
     def test_doubletake_archive_preserves_vendor_sources_and_excludes_credentials(self):
         root = self.root / 'doubletake'
         wanted = ['LICENSE', 'README.md', 'go.mod', 'go.sum', 'cmd/doubletake/main.go',
+                  'internal/airplay/credentials.go', 'internal/airplay/credentials_keyring.go',
                   'vendor/modules.txt', 'vendor/example.org/lib/lib.go',
                   'vendor/example.org/lib/LICENSE', 'vendor/example.org/lib/table.bin']
         for name in wanted + ['.git/config', 'bin/doubletake', 'credentials.json', 'private.key',

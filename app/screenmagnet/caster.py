@@ -68,7 +68,8 @@ def _has_native_encoder() -> bool:
     for name in _H264_ENCODERS:
         try:
             if subprocess.run(
-                [gst_inspect, name], capture_output=True, timeout=5
+                [gst_inspect, name], capture_output=True, timeout=5,
+                env=windows_runtime.child_environment(),
             ).returncode == 0:
                 return True
         except (OSError, subprocess.TimeoutExpired):
@@ -247,7 +248,8 @@ class Caster(QObject):
         if _runs_natively():
             return
         try:
-            out = subprocess.run(["ps", "-eo", "pid,cmd"], capture_output=True, text=True).stdout
+            out = subprocess.run(["ps", "-eo", "pid,cmd"], capture_output=True, text=True,
+                                 env=windows_runtime.child_environment()).stdout
             for line in out.splitlines():
                 if "bin/doubletake" in line and "grep" not in line:
                     try:

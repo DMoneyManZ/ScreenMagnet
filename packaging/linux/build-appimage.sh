@@ -73,17 +73,17 @@ echo "=== 1/4 freezing the app with PyInstaller ==="
 "$HERE/build-venv/bin/pip" install --upgrade pip >/dev/null
 "$HERE/build-venv/bin/pip" install -r "$HERE/requirements-build.txt"
 
-RELEASE_DATA="${SCREENMAGNET_RELEASE_DATA:-$REPO/build/release-data}"
-if [ ! -d "$RELEASE_DATA" ]; then
-    SENDER_SOURCE="${SCREENMAGNET_DOUBLETAKE_SOURCE:-${XDG_CACHE_HOME:-$HOME/.cache}/screenmagnet/doubletake-src}"
-    [ -f "$SENDER_SOURCE/vendor/modules.txt" ] || {
-        echo "Matching sender source/vendor required. Run install-doubletake.sh or set SCREENMAGNET_DOUBLETAKE_SOURCE." >&2
-        exit 1
-    }
-    export PATH="${XDG_DATA_HOME:-$HOME/.local/share}/screenmagnet/toolchain/go/bin:$PATH"
-    "$HERE/build-venv/bin/python" "$REPO/packaging/stage_release_data.py" \
-        --doubletake-source "$SENDER_SOURCE" --output "$RELEASE_DATA"
-fi
+# Always stage current sources into the freshly cleared build directory. Reusing
+# a previous payload after editing app code would distribute mismatched sources.
+RELEASE_DATA="$HERE/build/release-data"
+SENDER_SOURCE="${SCREENMAGNET_DOUBLETAKE_SOURCE:-${XDG_CACHE_HOME:-$HOME/.cache}/screenmagnet/doubletake-src}"
+[ -f "$SENDER_SOURCE/vendor/modules.txt" ] || {
+    echo "Matching sender source/vendor required. Run install-doubletake.sh or set SCREENMAGNET_DOUBLETAKE_SOURCE." >&2
+    exit 1
+}
+export PATH="${XDG_DATA_HOME:-$HOME/.local/share}/screenmagnet/toolchain/go/bin:$PATH"
+"$HERE/build-venv/bin/python" "$REPO/packaging/stage_release_data.py" \
+    --doubletake-source "$SENDER_SOURCE" --output "$RELEASE_DATA"
 
 
 "$HERE/build-venv/bin/pyinstaller" \
@@ -99,7 +99,6 @@ fi
 
 cp -r "$HERE/frozen/ScreenMagnet/." "$APPDIR/usr/bin/"
 
-RELEASE_DATA="${SCREENMAGNET_RELEASE_DATA:-$REPO/build/release-data}"
 for required in source licenses THIRD-PARTY-NOTICES.md; do
     [ -e "$RELEASE_DATA/$required" ] || { echo "Missing release source/notices: $RELEASE_DATA/$required" >&2; exit 1; }
 done

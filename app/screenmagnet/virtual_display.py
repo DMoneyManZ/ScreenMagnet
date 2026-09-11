@@ -7,13 +7,11 @@ needs an actual virtual/indirect display *device* for Windows to enumerate, so t
 capture backend has something to grab -- exactly like a real monitor. See
 docs/EXTENDED-DISPLAY.md for the full feasibility writeup.
 
-This module now drives a real (but never-yet-installed-in-this-session) candidate: the
-open-source **VirtualDrivers/Virtual-Display-Driver** project (MIT, signed via
-SignPath.io). A copy of its portable "VDD Control" app is vendored at
-``packaging/windows/vendor/VirtualDisplayDriver-installer.zip`` (see that folder's
-README) -- installing it is a one-time, one-UAC-click admin action this session cannot
-perform on the user's behalf, so this module only ever *checks* and *drives* an
-already-installed copy; it never launches the installer itself.
+This experimental integration uses VirtualDrivers/Virtual-Display-Driver.
+ScreenMagnet directs users to the project's official releases for the optional
+driver; it is not included or installed by ScreenMagnet setup. This module checks
+and controls an already-installed copy. The integration still needs real-device
+validation.
 
 Three states matter, and they're genuinely different (research-confirmed, see
 docs/EXTENDED-DISPLAY.md):
@@ -77,12 +75,6 @@ DEFAULT_SIDE = "right"
 _FRIENDLY_NAMES = ("Virtual Display Driver", "IddSampleDriver Device HDR")
 _INSTANCE_ID_PREFIX = "ROOT\\MttVDD"  # Get-PnpDevice .InstanceId prefix for the adapter
 _MONITOR_MARKER = "MTT1337"  # spoofed EDID manufacturer/product code on the monitor sub-device
-
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-# The download report for this session confirms only a .zip exists upstream (the
-# project ships a portable app, not a classic installer) -- see the README next to it.
-# Do not "fix" this to .exe: that file genuinely does not exist.
-INSTALLER_ZIP = REPO_ROOT / "packaging" / "windows" / "vendor" / "VirtualDisplayDriver-installer.zip"
 
 NOT_INSTALLED_MSG = (
     "Extended display is an experimental preview and needs the optional "

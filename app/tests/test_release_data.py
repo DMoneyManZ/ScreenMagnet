@@ -30,7 +30,8 @@ class ReleaseData(unittest.TestCase):
 
     def test_application_source_excludes_private_and_prebuilt_files(self):
         root = self.root / 'app'
-        wanted = ['LICENSE', 'pyproject.toml', 'README.md', 'screenmagnet-linux.sh', 'app/screenmagnet/__init__.py',
+        wanted = ['LICENSE', 'pyproject.toml', 'README.md', 'CHANGELOG.md', '.gitignore', '.github/FUNDING.yml',
+                  'screenmagnet-linux.sh', 'app/screenmagnet/__init__.py',
                   'app/assets/screenmagnet.svg', 'packaging/windows/build.ps1',
                   'patches/0001.patch', 'app/tests/test_core.py', 'docs/WINDOWS-INSTALL.md']
         unwanted = ['.git/config', '.env', 'lora/training.py', 'docs/RESEARCH-FINDINGS.md',

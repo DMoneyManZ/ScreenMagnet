@@ -65,8 +65,9 @@ def selected_tree(root, folder, suffixes=None):
 
 def application_files(root):
     root = Path(root)
-    for name in ('LICENSE', 'README.md', 'pyproject.toml', 'screenmagnet-linux.sh', 'app/run.sh', 'app/run.bat',
-                 'app/run-settings.bat', 'app/screenmagnet.desktop'):
+    for name in ('LICENSE', 'README.md', 'CHANGELOG.md', '.gitignore', '.github/FUNDING.yml',
+                 'pyproject.toml', 'screenmagnet-linux.sh', 'app/run.sh', 'app/run.bat',
+                 'app/run-settings.bat', 'app/screenmagnet.desktop', 'spike/latency-clock.py'):
         path = root / name
         if path.is_symlink():
             raise ValueError('Linked application source: ' + name)

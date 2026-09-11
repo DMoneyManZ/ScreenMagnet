@@ -97,10 +97,9 @@ jobs:
           go mod vendor
           CGO_ENABLED=0 go build -trimpath -o bin/doubletake ./cmd/doubletake
           cd ../..
-          python packaging/stage_release_data.py --doubletake-source build/doubletake --output build/release-data
       - name: Build and verify AppImage
         run: |
-          PYTHON=python bash packaging/linux/build-appimage.sh build/doubletake/bin/doubletake
+          PYTHON=python SCREENMAGNET_DOUBLETAKE_SOURCE="$GITHUB_WORKSPACE/build/doubletake" bash packaging/linux/build-appimage.sh build/doubletake/bin/doubletake
           bash packaging/linux/verify-appimage.sh packaging/linux/dist/ScreenMagnet-x86_64.AppImage
           cp packaging/linux/install-appimage.sh screenmagnet-linux.sh app/assets/screenmagnet.svg docs/INSTALL.md packaging/linux/dist/
       - name: Stage Linux downloads

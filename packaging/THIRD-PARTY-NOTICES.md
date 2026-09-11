@@ -12,7 +12,7 @@ upstream notices remain authoritative for their respective components.
 |---|---|
 | Python 3.13 | Exact interpreter version in `licenses/components.json`; Python license and incorporated-library notices in `licenses/python` |
 | PySide6 Essentials and Shiboken 6.11.1 | Original license texts in `licenses/pyside-setup`; corresponding binding sources in the matching `pyside-setup` archive |
-| Qt Base, SVG, and image-format plugins 6.11.1 | Version-matched source archives in `source/dependencies`, with extracted license and attribution files under `licenses` |
+| Qt Base, SVG, image-format plugins, and Wayland 6.11.1 | Version-matched source archives in `source/dependencies`, with extracted license and attribution files under `licenses` |
 | zeroconf 0.150.0 | LGPL 2.1 or later; complete PyPI source distribution and original notices |
 | ifaddr | Exact installed version in the manifest, with its PyPI source distribution and original notices |
 | Patched DoubleTake and its Go dependencies | Patched application source, Go module manifests, and vendored dependency sources in `source/DoubleTake-patched-source.tar.gz`; original notices under `licenses/doubletake` |
@@ -29,6 +29,14 @@ source download locations, archive SHA-256 hashes, and the vendored Go module
 inventory. The Qt source downloads come from The Qt Company. The zeroconf and
 ifaddr archives are selected for the exact installed versions from PyPI and
 verified against PyPI's published SHA-256 digests.
+
+Linux packages additionally include `licenses/system-libraries.json`, which
+maps the collected system libraries to their exact Ubuntu binary and source
+package versions. Original distribution copyright files and referenced common
+license texts are in `licenses/system`; matching source package downloads are
+in `source/system`. The bundled ICU libraries from the Qt wheel have their
+version-matched source and notices recorded in that same manifest. These system
+components retain their individual upstream licenses.
 
 ## Rebuilding or modifying libraries
 

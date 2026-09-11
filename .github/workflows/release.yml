@@ -7,6 +7,11 @@ on:
         description: 'Existing private draft tag prepared for this exact commit (optional)'
         required: false
         type: string
+      platform:
+        description: 'Package to verify'
+        type: choice
+        options: [all, linux, windows]
+        default: all
   push:
     tags: ["v*"]
 
@@ -51,6 +56,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   linux:
+    if: inputs.platform != 'windows'
     needs: prepare
     runs-on: ubuntu-22.04
     timeout-minutes: 35
@@ -69,6 +75,8 @@ jobs:
           cache: false
       - name: Install build libraries and Python packages
         run: |
+          awk '/^deb / {$1="deb-src"; print}' /etc/apt/sources.list | sudo tee /etc/apt/sources.list.d/screenmagnet-source.list >/dev/null
+          test -s /etc/apt/sources.list.d/screenmagnet-source.list
           sudo apt-get update
           sudo apt-get install -y appstream desktop-file-utils libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-util1 libxcb-xkb1
           python -m pip install -r packaging/linux/requirements-build.txt
@@ -102,6 +110,7 @@ jobs:
         run: gh release upload "$DRAFT_TAG" packaging/linux/dist/* --repo "$GITHUB_REPOSITORY"
 
   windows:
+    if: inputs.platform != 'linux'
     needs: prepare
     runs-on: windows-2022
     timeout-minutes: 40

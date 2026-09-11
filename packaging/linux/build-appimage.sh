@@ -106,6 +106,12 @@ mkdir -p "$APPDIR/usr/share/screenmagnet"
 cp -r "$RELEASE_DATA/." "$APPDIR/usr/share/screenmagnet/"
 cp "$REPO/LICENSE" "$APPDIR/usr/share/screenmagnet/LICENSE"
 
+# Account for the actual ELF libraries collected on this builder, including
+# host GTK/GLib and the ICU runtime carried by Qt's wheel.
+"$HERE/build-venv/bin/python" "$HERE/stage_system_sources.py" \
+    --frozen "$HERE/frozen/ScreenMagnet" \
+    --output "$APPDIR/usr/share/screenmagnet"
+
 
 echo "=== 2/4 bundling doubletake ==="
 mkdir -p "$APPDIR/usr/bin/doubletake/bin"

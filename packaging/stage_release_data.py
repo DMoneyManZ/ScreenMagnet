@@ -209,7 +209,7 @@ def check_package_versions():
 
 def stage_dependencies(stage, versions):
     records = []
-    for module in ('qtbase', 'qtsvg', 'qtimageformats', 'pyside-setup'):
+    for module in ('qtbase', 'qtsvg', 'qtimageformats', 'qtwayland', 'pyside-setup'):
         filename = f'{module}-everywhere-src-{QT_VERSION}.tar.xz'
         base = (f'https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-{QT_VERSION}-src/'
                 if module == 'pyside-setup' else

@@ -108,6 +108,11 @@ def preflight() -> list[str]:
 def _sender_argv(args: list[str]) -> tuple[str, list[str]]:
     """Build the (program, argv) pair that runs doubletake on this platform."""
     if _runs_natively():
+        if IS_WINDOWS:
+            # The Go sender's default is independent of cwd (it consults
+            # XDG_CONFIG_HOME/USERPROFILE). Pin credentials to our user data.
+            credentials = windows_runtime.sender_working_directory() / 'credentials.json'
+            args = [*args, '-creds', str(credentials)]
         return str(BINARY), args
     inner = (
         f"cd {shlex.quote(str(DOUBLETAKE_DIR))} && "
@@ -175,12 +180,11 @@ class Caster(QObject):
         if pin:
             args += ["-pin", pin, "-pair"]
 
-        program, argv = _sender_argv(args)
-
         try:
             working_directory = windows_runtime.sender_working_directory() if _runs_natively() else None
+            program, argv = _sender_argv(args)
         except OSError as exc:
-            self.failed.emit(f"Cannot create sender data directory: {exc}")
+            self.failed.emit(f"Cannot prepare sender data directory: {exc}")
             return
         self._proc = QProcess(self)
         proc = self._proc

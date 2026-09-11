@@ -191,6 +191,8 @@ jobs:
 
   ubuntu-24-runtime:
     needs: [prepare, linux]
+    permissions:
+      contents: write # Draft release assets require repository push access.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

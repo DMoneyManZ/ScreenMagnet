@@ -17,7 +17,9 @@ class InstalledRuntimeTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        # Windows TEMP can use an 8.3 alias (RUNNER~1); use the same canonical
+        # spelling as the frozen executable resolver for every path fixture.
+        self.root = Path(self.temporary.name).resolve()
 
     def test_frozen_sender_is_found_beside_exe_without_registry_environment(self):
         with patch.object(runtime, 'IS_WINDOWS', True), patch.object(sys, 'frozen', True, create=True), \
@@ -35,6 +37,30 @@ class InstalledRuntimeTests(unittest.TestCase):
             directory = runtime.sender_working_directory()
             self.assertEqual(directory, self.root / 'Local/ScreenMagnet/sender-state')
             self.assertTrue(directory.is_dir())
+
+    def test_windows_sender_receives_explicit_private_credentials_path(self):
+        from screenmagnet import caster
+        with patch.object(caster, 'IS_WINDOWS', True), patch.object(runtime, 'IS_WINDOWS', True), \
+                patch.dict(os.environ, {'LOCALAPPDATA': str(self.root / 'Local')}):
+            program, arguments = caster._sender_argv(['-target', '192.0.2.24'])
+        self.assertEqual(arguments, ['-target', '192.0.2.24', '-creds',
+                                   str(self.root / 'Local/ScreenMagnet/sender-state/credentials.json')])
+
+    def test_standard_gstreamer_install_precedes_stale_generic_environment(self):
+        standard = self.root / 'Programs/gstreamer/1.0/msvc_x86_64/bin'
+        stale = self.root / 'stale-runtime/bin'
+        explicit = self.root / 'chosen-runtime/bin'
+        for directory in (standard, stale, explicit):
+            directory.mkdir(parents=True)
+            for name in ('gst-launch-1.0.exe', 'gst-inspect-1.0.exe'):
+                (directory / name).touch()
+        with patch.object(runtime, 'IS_WINDOWS', True), patch.dict(os.environ, {
+                'ProgramFiles': str(self.root / 'Programs'), 'SystemDrive': str(self.root),
+                'GSTREAMER_ROOT_X86_64': str(stale.parent), 'PATH': '',
+        }, clear=True):
+            self.assertEqual(runtime.gstreamer_bin(), standard)
+            with patch.dict(os.environ, {'SCREENMAGNET_GSTREAMER': str(explicit.parent)}):
+                self.assertEqual(runtime.gstreamer_bin(), explicit)
 
     def test_gstreamer_is_discovered_without_inherited_path(self):
         bin_dir = self.root / 'Programs/gstreamer/1.0/msvc_x86_64/bin'
@@ -80,7 +106,8 @@ class InstalledRuntimeTests(unittest.TestCase):
     def test_self_test_writes_failure_report_and_returns_nonzero(self):
         from screenmagnet import __main__ as entry
         report = self.root / 'self-test.json'
-        with patch.object(entry, '_self_test_checks', side_effect=RuntimeError('missing runtime')):
+        with patch.object(entry, '_self_test_checks', side_effect=RuntimeError('missing runtime')), \
+                patch.object(sys, 'stdout', None):
             self.assertEqual(entry._run_self_test(report), 1)
         import json
         result = json.loads(report.read_text())
@@ -89,7 +116,8 @@ class InstalledRuntimeTests(unittest.TestCase):
 
     def test_unwritable_self_test_report_is_a_failure(self):
         from screenmagnet import __main__ as entry
-        with patch.object(entry, '_self_test_checks', return_value={'synthetic_video_encode': True}):
+        with patch.object(entry, '_self_test_checks', return_value={'synthetic_video_encode': True}), \
+                patch.object(sys, 'stdout', None):
             self.assertEqual(entry._run_self_test(self.root), 1)
 
 

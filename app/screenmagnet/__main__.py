@@ -150,11 +150,20 @@ def _self_test_checks() -> dict:
         if problems:
             raise RuntimeError('; '.join(problems))
         runtime = windows_runtime.gstreamer_bin()
+        import re
         plugins = ('d3d11screencapturesrc', 'd3d11convert', 'd3d11download',
                    'tcpclientsink', 'videoconvert', 'videoscale', 'x264enc',
                    'h264parse', 'wasapi2src', 'audioconvert', 'audioresample')
         with tempfile.TemporaryDirectory(prefix='screenmagnet-encode-test-') as directory:
             with windows_runtime.external_dll_search():
+                version_result = subprocess.run([str(runtime / 'gst-inspect-1.0.exe'), '--version'],
+                                                capture_output=True, text=True, timeout=20,
+                                                cwd=directory, env=environment,
+                                                creationflags=subprocess.CREATE_NO_WINDOW)
+                version_match = re.search(r'(\d+)\.(\d+)\.(\d+)', version_result.stdout)
+                if (version_result.returncode or not version_match or
+                        tuple(map(int, version_match.groups())) < (1, 28, 5)):
+                    raise RuntimeError('GStreamer 1.28.5 or newer is required.')
                 for plugin in plugins:
                     result = subprocess.run([str(runtime / 'gst-inspect-1.0.exe'), plugin],
                                             capture_output=True, text=True, timeout=20,
@@ -171,7 +180,8 @@ def _self_test_checks() -> dict:
                     env=environment, creationflags=subprocess.CREATE_NO_WINDOW)
                 if result.returncode:
                     raise RuntimeError(f'Synthetic H.264 encode failed: {result.stderr[-1000:]}')
-        report.update(preflight=True, gstreamer_plugins=list(plugins), synthetic_video_encode=True,
+        report.update(preflight=True, gstreamer_version=version_match.group(0),
+                      gstreamer_plugins=list(plugins), synthetic_video_encode=True,
                       real_capture_tested=False, airplay_receiver_tested=False,
                       preview_note='Reconstructed Windows capture/audio; real TV validation remains pending.')
     spinner.deleteLater()

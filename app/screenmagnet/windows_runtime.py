@@ -31,13 +31,15 @@ def sender_working_directory() -> Path:
 
 
 def gstreamer_bin() -> Path | None:
-    """Find a complete Windows runtime in overrides or standard install roots."""
+    """Prefer the setup-verified standard installation over stale generic roots.
+
+    SCREENMAGNET_GSTREAMER remains an intentional application-specific override.
+    Setup and the Windows self-test verify versions/plugins at the selected root.
+    """
     candidates = []
-    for variable in ('SCREENMAGNET_GSTREAMER', 'GSTREAMER_1_0_ROOT_MSVC_X86_64',
-                     'GSTREAMER_ROOT_X86_64', 'GSTREAMER_ROOT'):
-        if os.environ.get(variable):
-            root = Path(os.environ[variable])
-            candidates.extend((root / 'bin', root))
+    if os.environ.get('SCREENMAGNET_GSTREAMER'):
+        root = Path(os.environ['SCREENMAGNET_GSTREAMER'])
+        candidates.extend((root / 'bin', root))
     for variable in ('ProgramW6432', 'ProgramFiles', 'LOCALAPPDATA'):
         value = os.environ.get(variable)
         if value:
@@ -46,6 +48,10 @@ def gstreamer_bin() -> Path | None:
                                root / 'Programs/gstreamer/1.0/msvc_x86_64/bin'))
     if IS_WINDOWS:
         candidates.append(Path(os.environ.get('SystemDrive', 'C:') + '/gstreamer/1.0/msvc_x86_64/bin'))
+    for variable in ('GSTREAMER_1_0_ROOT_MSVC_X86_64', 'GSTREAMER_ROOT_X86_64', 'GSTREAMER_ROOT'):
+        if os.environ.get(variable):
+            root = Path(os.environ[variable])
+            candidates.extend((root / 'bin', root))
     for name in ('gst-launch-1.0.exe', 'gst-inspect-1.0.exe'):
         found = shutil.which(name)
         if found:

@@ -77,7 +77,9 @@ function Find-GStreamer {
         if ($LASTEXITCODE -ne 0 -or $versionText -notmatch '(\d+\.\d+\.\d+)') { continue }
         if ([Version]$Matches[1] -lt [Version]'1.28.5') { continue }
         $valid = $true
-        foreach ($plugin in @('d3d11screencapturesrc', 'x264enc', 'wasapi2src')) {
+        foreach ($plugin in @('d3d11screencapturesrc', 'd3d11convert', 'd3d11download',
+                             'tcpclientsink', 'videoconvert', 'videoscale', 'x264enc',
+                             'h264parse', 'wasapi2src', 'audioconvert', 'audioresample')) {
             $null = & $inspect $plugin 2>&1
             if ($LASTEXITCODE -ne 0) { $valid = $false; break }
         }

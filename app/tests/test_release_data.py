@@ -37,7 +37,11 @@ class ReleaseData(unittest.TestCase):
         unwanted = ['.git/config', '.env', 'lora/training.py', 'docs/RESEARCH-FINDINGS.md',
                     'docs/superpowers/session.md', 'app/screenmagnet/__pycache__/cache.pyc',
                     'packaging/windows/vendor/doubletake.exe', 'packaging/windows/vendor/README.md',
-                    'app/assets/private.key', 'packaging/logs/build.txt', 'docs/token.log']
+                    'app/assets/private.key', 'packaging/logs/build.txt', 'docs/token.log',
+                    'packaging/linux/build-venv/lib/site-packages/private.py',
+                    'packaging/linux/AppDir/usr/share/screenmagnet/source/private.txt',
+                    'packaging/linux/frozen/ScreenMagnet/private.py',
+                    'packaging/windows/output/private.txt', 'packaging/linux/ScreenMagnet.spec']
         for name in wanted + unwanted:
             self.write(root, name)
         result = {p.relative_to(root).as_posix() for p in self.module.application_files(root)}

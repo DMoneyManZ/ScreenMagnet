@@ -27,13 +27,14 @@ QT_VERSION = '6.11.1'
 PINNED = {'PySide6-Essentials': QT_VERSION, 'shiboken6': QT_VERSION,
           'zeroconf': '0.150.0', 'PyInstaller': '6.22.2'}
 SKIP_DIRS = {'.git', '.venv', '__pycache__', 'build', 'dist', 'bin', 'logs',
-             'credentials', 'secrets', 'lora', 'superpowers'}
+             'credentials', 'secrets', 'lora', 'superpowers', 'build-venv',
+             'frozen', 'appdir', 'output', 'prereqs', 'runtime-cache'}
 SKIP_SUFFIXES = {'.exe', '.dll', '.so', '.dylib', '.o', '.a', '.pyc', '.pyd',
                  '.log', '.key', '.pem', '.zip', '.7z', '.msi', '.msix'}
 
 
 def excluded(relative):
-    return (any(p.lower() in SKIP_DIRS or p.startswith('.') for p in relative.parts)
+    return (any(p.lower() in SKIP_DIRS or p.startswith('.') or p.endswith('.egg-info') for p in relative.parts)
             or relative.suffix.lower() in SKIP_SUFFIXES
             or relative.name.lower().startswith(('credentials', 'secrets', 'token.')))
 
@@ -76,7 +77,7 @@ def application_files(root):
     for folder, suffixes in (
         ('app/screenmagnet', {'.py'}), ('app/assets', {'.svg', '.png', '.ico'}),
         ('app/tests', {'.py'}), ('patches', {'.patch'}),
-        ('packaging', {'.py', '.ps1', '.sh', '.iss', '.spec', '.txt', '.desktop', '.xml', '.md'}),
+        ('packaging', {'.py', '.ps1', '.sh', '.iss', '.txt', '.desktop', '.xml', '.md'}),
         ('docs', {'.md', '.png', '.svg'}),
     ):
         for path in selected_tree(root, folder, suffixes):

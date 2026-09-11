@@ -4,9 +4,14 @@ ScreenMagnet is distributed under GPL version 3 or later. The application licens
 is included with the release, and its buildable source, packaging scripts,
 patches, and tests are in `source/ScreenMagnet-source.tar.gz`.
 
-The release data directory is beside the application resources in each package;
-look for this file and the adjacent `source` and `licenses` directories. Original
-upstream notices remain authoritative for their respective components.
+Windows packages include adjacent `source` and `licenses` directories. Linux
+keeps notices inside the AppImage and provides sources in the accompanying
+`ScreenMagnet-Linux-Corresponding-Source.tar.gz` download on the same release page.
+The AppImage's `source-archive.json` records that archive's exact SHA-256. Download
+it from the same release to rebuild or modify the application and dependencies;
+preserve the source download when redistributing the release. Paths below are
+relative to the extracted source archive on Linux. Original upstream notices
+remain authoritative for their respective components.
 
 | Component | Included material |
 |---|---|
@@ -37,6 +42,14 @@ license texts are in `licenses/system`; matching source package downloads are
 in `source/system`. The bundled ICU libraries from the Qt wheel have their
 version-matched source and notices recorded in that same manifest. These system
 components retain their individual upstream licenses.
+
+The outer AppImage Type 2 runtime is pinned separately. Its exact revision,
+binary checksum, static dependency versions, and source hashes are recorded in
+`appimage-runtime-manifest.json`; original notices are under
+`licenses/appimage-runtime`. Corresponding runtime/dependency
+sources and exact Alpine build recipes are in `source/appimage-runtime`. See
+the included `packaging/linux/APPIMAGE-RUNTIME.md` in the application source for
+provenance and rebuild details, including the GCC Runtime Library Exception.
 
 ## Rebuilding or modifying libraries
 

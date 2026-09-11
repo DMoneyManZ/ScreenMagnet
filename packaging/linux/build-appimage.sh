@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build a Linux AppImage for ScreenMagnet. Must run on Linux (CI does this on
-# Ubuntu 22.04; run it yourself on any glibc-based x86_64 Linux host with
-# Python 3.13 and curl).
+# Ubuntu 22.04, with deb-src repositories enabled so bundled libraries have
+# matching source packages). Python 3.13, Go, curl and apt/dpkg are build tools;
+# they are not required to launch the finished AppImage.
 #
 # Usage: packaging/linux/build-appimage.sh <path-to-doubletake-linux-binary>
 #
@@ -149,6 +150,12 @@ exec "$HERE/usr/bin/ScreenMagnet" "$@"
 EOF
 chmod +x "$APPDIR/AppRun"
 
+APPIMAGE_RUNTIME="$("$HERE/build-venv/bin/python" "$HERE/stage_appimage_runtime.py" \
+    --output "$APPDIR/usr/share/screenmagnet" --cache "$REPO/build/appimage-runtime-cache")"
+
+"$HERE/build-venv/bin/python" "$HERE/package_source_archive.py" \
+    --payload "$APPDIR/usr/share/screenmagnet" --dist "$DIST"
+
 echo "=== 4/4 packaging the AppImage ==="
 if [ ! -x "$HERE/appimagetool.AppImage" ]; then
     curl -fL -o "$HERE/appimagetool.AppImage" \
@@ -166,7 +173,7 @@ echo "$APPIMAGETOOL_SHA256  $HERE/appimagetool.AppImage" | sha256sum --check --s
 # ship only FUSE 3, so the plain invocation dies with "dlopen(): error loading
 # libfuse.so.2". This flag unpacks the tool and runs it directly -- no FUSE needed.
 ARCH=x86_64 "$HERE/appimagetool.AppImage" --appimage-extract-and-run \
-    "$APPDIR" "$DIST/ScreenMagnet-x86_64.AppImage"
+    --runtime-file "$APPIMAGE_RUNTIME" "$APPDIR" "$DIST/ScreenMagnet-x86_64.AppImage"
 (
     cd "$DIST"
     sha256sum ScreenMagnet-x86_64.AppImage > ScreenMagnet-x86_64.AppImage.sha256

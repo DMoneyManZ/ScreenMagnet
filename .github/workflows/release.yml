@@ -211,7 +211,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DRAFT_TAG: ${{ needs.prepare.outputs.tag }}
-        run: gh release download "$DRAFT_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'ScreenMagnet-x86_64.AppImage*' --pattern install-appimage.sh --pattern screenmagnet.svg --dir artifact
+        run: gh release download "$DRAFT_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'ScreenMagnet-x86_64.AppImage*' --pattern 'ScreenMagnet-Linux-Corresponding-Source.tar.gz*' --pattern install-appimage.sh --pattern screenmagnet.svg --dir artifact
       - name: Install desktop runtime libraries
         run: |
           sudo apt-get update

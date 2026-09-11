@@ -35,6 +35,12 @@ The installer can also read a release-wide `SHA256SUMS` file when the individual
 `.sha256` file is absent. The manifest must contain exactly one checksum record
 naming the selected AppImage.
 
+For source code and rebuilding, the same release includes
+`ScreenMagnet-Linux-Corresponding-Source.tar.gz` and its `.sha256`. This separate
+download contains matching application and dependency sources; it is not needed
+to launch the app. Original license notices remain inside the AppImage. Preserve
+the source archive alongside the app when redistributing a release.
+
 From a terminal in the download folder, verify the AppImage:
 
 ```bash
@@ -174,10 +180,20 @@ run it. The installer includes the application and patched sender, and runs the
 GStreamer and Visual C++ runtime prerequisites as needed. It uses the standard
 Windows administrator prompt for those system-wide prerequisites.
 
-**Internet access is required during setup.** The GStreamer prerequisite is the
-official upstream online installer; including that installer in ScreenMagnet's
-setup does not make all GStreamer payloads available offline. Wait for setup to
-finish before opening ScreenMagnet from the Start menu.
+**Internet access is required during setup.** Missing prerequisites are downloaded
+directly from GStreamer and Microsoft, about 900 MB on a clean machine. They are
+not embedded in ScreenMagnet's installer. Setup checks GStreamer's pinned release
+checksum and the Visual C++ installer's recorded checksum and Microsoft signature
+before execution. Wait for setup to finish, then open ScreenMagnet from Start.
+
+The ScreenMagnet preview itself is unsigned, so Windows may show an unknown
+publisher or SmartScreen prompt. Check that the download came from this project's
+release page and verify its matching `.sha256` before deciding whether to run it.
+
+For portable use, extract all of `ScreenMagnet-Windows-x64.zip` together. The same
+GStreamer 1.28.5 MSVC x64 and Visual C++ runtimes must already be installed.
+Pairing files live under `%LOCALAPPDATA%\ScreenMagnet\sender-state`; uninstalling
+ScreenMagnet preserves user data and shared prerequisites.
 
 A successful setup or Windows smoke test is not a guarantee of discovery,
 pairing, video, or audio with a particular real receiver. Use the preview's

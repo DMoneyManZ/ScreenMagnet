@@ -16,9 +16,13 @@
 
 ## Tasks
 
-- [ ] Runtime repair: regression tests for frozen Windows sender lookup and GStreamer path setup; resolve sibling sender without registry environment changes, keep writable pairing state outside Program Files, and handle missing sender launch visibly.
-- [ ] Windows package: build the patched sender from pinned source, match setup version0.84, provide explicit official prerequisite downloads, run frozen self-test and installed/uninstalled smoke checks; use an upstream link for optional VDD rather than an absent bundled ZIP.
-- [ ] License/source payload: stage allowlisted application source, patched Go source with vendored dependencies, exact Qt/PySide/zeroconf sources and license texts. Both package formats include the staged payload.
-- [ ] Linux package: verify existing artifact, add missing source/notices, add a per-user installation path for the downloaded AppImage plus desktop icon and clear capture-dependency setup.
-- [ ] CI delivery: run native Windows and Ubuntu packaging checks; use draft release assets because Actions artifact quota was reached in this account. Keep packages reviewable and private.
-- [ ] Release review: inspect hashes and package inventories, document actual test evidence and remaining receiver/hardware checks, and report ProjectScope's existing .run-only/GNOME50 limitation.
+- [x] Runtime repair: regression tests for frozen Windows sender lookup and GStreamer path setup; resolve sibling sender without registry environment changes, keep writable pairing state outside Program Files, and handle missing sender launch visibly.
+- [x] Windows package: build the patched sender from pinned source, match setup version0.84, provide explicit official prerequisite downloads, run frozen self-test and installed/uninstalled smoke checks; use an upstream link for optional VDD rather than an absent bundled ZIP.
+- [x] License/source payload: stage allowlisted application source, patched Go source with vendored dependencies, exact Qt/PySide/zeroconf sources and license texts. Both package formats include the staged payload.
+- [x] Linux package: verify existing artifact, add missing source/notices, add a per-user installation path for the downloaded AppImage plus desktop icon and clear capture-dependency setup.
+- [x] CI delivery: run native Windows and Ubuntu packaging checks; use draft release assets because Actions artifact quota was reached in this account. Keep packages reviewable and private.
+- [x] Release review: inspect hashes and package inventories, document actual test evidence and remaining receiver/hardware checks, and report ProjectScope's existing .run-only/GNOME50 limitation.
+
+## Completion evidence
+
+See [release results](2026-09-11-release-results.md) for exact successful builds, artifact hashes, the clean public export, and remaining publication/hardware gates. Preparation and verification are complete; public visibility and stable-release qualification remain separate.

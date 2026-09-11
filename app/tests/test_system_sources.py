@@ -16,7 +16,7 @@ class SystemSources(unittest.TestCase):
         spec.loader.exec_module(self.module)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
 
     def test_system_mapping_requires_identical_bytes_not_only_soname(self):
         bundled = self.root / 'bundled/libexample.so.1'

@@ -5,6 +5,9 @@ from __future__ import annotations
 import signal
 import subprocess
 import sys
+import json
+from pathlib import Path
+import tempfile
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
@@ -102,19 +105,53 @@ def _run_settings_only(argv: list[str]) -> int:
     return app.exec()
 
 
-def _run_self_test() -> int:
+def _check_linux_capture_runtime(environment: dict[str, str]) -> dict:
+    """Explicit, bounded host GStreamer check; synthetic frames never leave fakesink."""
+    import shutil
+
+    inspect = shutil.which('gst-inspect-1.0', path=environment.get('PATH', ''))
+    launch = shutil.which('gst-launch-1.0', path=environment.get('PATH', ''))
+    if not inspect or not launch:
+        raise RuntimeError('GStreamer tools are required for --require-capture-runtime.')
+    plugins = ('videotestsrc', 'videoconvert', 'x264enc', 'h264parse', 'fakesink')
+    with tempfile.TemporaryDirectory(prefix='screenmagnet-linux-encode-test-') as directory:
+        environment = dict(environment)
+        environment['GST_REGISTRY_1_0'] = str(Path(directory) / 'registry.bin')
+        for plugin in plugins:
+            result = subprocess.run([inspect, plugin], capture_output=True, text=True,
+                                    timeout=15, cwd=directory, env=environment)
+            if result.returncode:
+                raise RuntimeError(f'GStreamer plugin unavailable: {plugin}: {result.stderr[-500:]}')
+        result = subprocess.run([
+            launch, '-q', 'videotestsrc', 'num-buffers=8', 'pattern=black',
+            '!', 'video/x-raw,width=320,height=240,framerate=30/1',
+            '!', 'videoconvert', '!', 'x264enc', 'tune=zerolatency',
+            'speed-preset=ultrafast', '!', 'h264parse', '!', 'fakesink', 'sync=false',
+        ], capture_output=True, text=True, timeout=30, cwd=directory, env=environment)
+        if result.returncode:
+            raise RuntimeError(f'Synthetic H.264 encode failed: {result.stderr[-1000:]}')
+    return {'capture_runtime_checked': True, 'gstreamer_plugins': list(plugins),
+            'synthetic_video_encode': True, 'real_capture_tested': False,
+            'airplay_receiver_tested': False}
+
+
+def _self_test_checks(require_capture_runtime: bool = False) -> dict:
     """Exercise the frozen runtime without requiring a tray or AirPlay target."""
     import os
 
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if sys.platform != 'win32':
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
     from .appicon import app_icon
-    from .caster import BINARY
+    from .caster import BINARY, preflight
     from .discovery import _is_ipv4
     from .spinner import ChasingArrows
+    from . import windows_runtime
 
     app = QApplication.instance() or QApplication([APP_NAME, "--self-test"])
-    assert not app_icon().isNull(), "application icon could not be rendered"
+    icon = app_icon(theme='Default')
+    assert not icon.isNull(), "application icon could not be rendered"
+    app.setWindowIcon(icon)
     assert _is_ipv4("192.0.2.24"), "IPv4 discovery filter failed"
 
     spinner = ChasingArrows()
@@ -123,25 +160,112 @@ def _run_self_test() -> int:
 
     if not BINARY.is_file():
         raise RuntimeError(f"doubletake binary missing at {BINARY}")
-    result = subprocess.run(
-        [str(BINARY), "--help"], capture_output=True, text=True, timeout=30
-    )
+    environment = windows_runtime.child_environment()
+    with tempfile.TemporaryDirectory(prefix='screenmagnet-self-test-') as directory:
+        with windows_runtime.external_dll_search():
+            result = subprocess.run(
+                [str(BINARY), "--help"], capture_output=True, text=True, timeout=30,
+                cwd=directory, env=environment,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0,
+            )
     help_text = result.stdout + result.stderr
     required = ("-monitor", "-target", "-hwaccel", "-pin", "-playout-floor-ms")
     missing = [flag for flag in required if flag not in help_text]
     if missing:
         raise RuntimeError("doubletake is missing required flags: " + ", ".join(missing))
+    report = {'qt_platform': app.platformName(), 'icon_rendered': True,
+              'sender_help_checked': True, 'screen_count': len(app.screens()),
+              'capture_runtime_checked': False}
+    if sys.platform == 'win32':
+        problems = preflight()
+        if problems:
+            raise RuntimeError('; '.join(problems))
+        runtime = windows_runtime.gstreamer_bin()
+        import re
+        plugins = ('d3d11screencapturesrc', 'd3d11convert', 'd3d11download',
+                   'tcpclientsink', 'videoconvert', 'videoscale', 'x264enc',
+                   'h264parse', 'wasapi2src', 'audioconvert', 'audioresample')
+        with tempfile.TemporaryDirectory(prefix='screenmagnet-encode-test-') as directory:
+            with windows_runtime.external_dll_search():
+                version_result = subprocess.run([str(runtime / 'gst-inspect-1.0.exe'), '--version'],
+                                                capture_output=True, text=True, timeout=20,
+                                                cwd=directory, env=environment,
+                                                creationflags=subprocess.CREATE_NO_WINDOW)
+                version_match = re.search(r'(\d+)\.(\d+)\.(\d+)', version_result.stdout)
+                if (version_result.returncode or not version_match or
+                        tuple(map(int, version_match.groups())) < (1, 28, 5)):
+                    raise RuntimeError('GStreamer 1.28.5 or newer is required.')
+                for plugin in plugins:
+                    result = subprocess.run([str(runtime / 'gst-inspect-1.0.exe'), plugin],
+                                            capture_output=True, text=True, timeout=20,
+                                            cwd=directory, env=environment,
+                                            creationflags=subprocess.CREATE_NO_WINDOW)
+                    if result.returncode:
+                        raise RuntimeError(f'GStreamer plugin unavailable: {plugin}: {result.stderr[-500:]}')
+                result = subprocess.run([
+                    str(runtime / 'gst-launch-1.0.exe'), '-q', 'videotestsrc', 'num-buffers=8',
+                    'pattern=black', '!', 'video/x-raw,width=320,height=240,framerate=30/1',
+                    '!', 'videoconvert', '!', 'x264enc', 'tune=zerolatency',
+                    'speed-preset=ultrafast', '!', 'h264parse', '!', 'fakesink', 'sync=false',
+                ], capture_output=True, text=True, timeout=30, cwd=directory,
+                    env=environment, creationflags=subprocess.CREATE_NO_WINDOW)
+                if result.returncode:
+                    raise RuntimeError(f'Synthetic H.264 encode failed: {result.stderr[-1000:]}')
+        report.update(preflight=True, capture_runtime_checked=True, gstreamer_version=version_match.group(0),
+                      gstreamer_plugins=list(plugins), synthetic_video_encode=True,
+                      real_capture_tested=False, airplay_receiver_tested=False,
+                      preview_note='Reconstructed Windows capture/audio; real TV validation remains pending.')
+    elif require_capture_runtime:
+        if not sys.platform.startswith('linux'):
+            raise RuntimeError('--require-capture-runtime is supported on Linux and Windows.')
+        report.update(_check_linux_capture_runtime(environment))
+    spinner.deleteLater()
+    app.processEvents()
+    return report
 
-    print(f"{APP_NAME} {__version__}: self-test passed")
-    return 0
+
+def _run_self_test(report_path: Path | None = None, require_capture_runtime: bool = False) -> int:
+    """Always return a bounded result, including when the report cannot be saved."""
+    report = {'version': __version__, 'platform': sys.platform, 'passed': False}
+    try:
+        report.update(_self_test_checks(require_capture_runtime=require_capture_runtime))
+        report['passed'] = True
+    except Exception as exc:
+        report['error'] = f'{type(exc).__name__}: {exc}'
+    if report_path is not None:
+        try:
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
+        except OSError as exc:
+            report.update(passed=False, error=f'Cannot write self-test report: {exc}')
+    if sys.stdout is not None:
+        print(json.dumps(report, indent=2))
+    return 0 if report['passed'] else 1
+
+
+def _set_windows_identity():
+    if sys.platform == 'win32':
+        import ctypes
+        shell32 = ctypes.WinDLL('shell32', use_last_error=True)
+        shell32.SetCurrentProcessExplicitAppUserModelID.argtypes = [ctypes.c_wchar_p]
+        shell32.SetCurrentProcessExplicitAppUserModelID.restype = ctypes.c_long
+        shell32.SetCurrentProcessExplicitAppUserModelID('io.screenmagnet.ScreenMagnet')
 
 
 def main() -> int:
+    _set_windows_identity()
     if "--version" in sys.argv[1:]:
         print(f"{APP_NAME} {__version__}")
         return 0
     if "--self-test" in sys.argv[1:]:
-        return _run_self_test()
+        import argparse
+        parser = argparse.ArgumentParser(description='Bounded ScreenMagnet runtime check; no screen capture or casting.')
+        parser.add_argument('--self-test', action='store_true')
+        parser.add_argument('--report', type=Path)
+        parser.add_argument('--require-capture-runtime', action='store_true',
+                            help='Also verify host GStreamer plugins and encode synthetic video; never capture or cast.')
+        args = parser.parse_args()
+        return _run_self_test(args.report, require_capture_runtime=args.require_capture_runtime)
     if "--settings" in sys.argv[1:]:
         return _run_settings_only([a for a in sys.argv if a != "--settings"])
 
@@ -150,6 +274,8 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_NAME)
+    from .appicon import app_icon
+    app.setWindowIcon(app_icon())
     # Plasma resolves the tray item's icon and name through the desktop file.
     app.setDesktopFileName("screenmagnet")
     # Tray-only app: closing the popup must not exit.

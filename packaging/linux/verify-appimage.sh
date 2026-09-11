@@ -29,6 +29,26 @@ test -x "$ROOT/usr/bin/ScreenMagnet"
 test -x "$ROOT/usr/bin/doubletake/bin/doubletake"
 test -f "$ROOT/screenmagnet.desktop"
 test -f "$ROOT/screenmagnet.svg"
+test -f "$ROOT/usr/share/screenmagnet/LICENSE"
+test -f "$ROOT/usr/share/screenmagnet/THIRD-PARTY-NOTICES.md"
+test -d "$ROOT/usr/share/screenmagnet/licenses"
+python3 - "$ROOT/usr/share/screenmagnet" "$(dirname "$ARTIFACT")" <<'PY'
+import hashlib,json,pathlib,sys,tarfile
+payload,downloads=map(pathlib.Path,sys.argv[1:])
+manifest=json.loads((payload/'source-archive.json').read_text())
+assert manifest['file']=='ScreenMagnet-Linux-Corresponding-Source.tar.gz'
+archive=downloads/manifest['file']
+digest=hashlib.sha256()
+with archive.open('rb') as stream:
+    for chunk in iter(lambda: stream.read(1024*1024), b''): digest.update(chunk)
+assert digest.hexdigest()==manifest['sha256'], 'Source download does not match AppImage'
+with tarfile.open(archive) as stream:
+    names=set(stream.getnames())
+assert {'source/ScreenMagnet-source.tar.gz','source/DoubleTake-patched-source.tar.gz',
+        'licenses/components.json','licenses/system-libraries.json',
+        'appimage-runtime-manifest.json','LICENSE'} <= names
+print('Matching corresponding-source download verified')
+PY
 test -f "$ROOT/usr/share/metainfo/io.github.DMoneyManZ.ScreenMagnet.metainfo.xml"
 
 if grep -Eq '@EXEC@|@WORKDIR@' "$ROOT/screenmagnet.desktop"; then
@@ -54,7 +74,8 @@ if [ -f "$CHECKSUM" ]; then
 fi
 
 # This path deliberately proves that FUSE is not required for the fallback.
-QT_QPA_PLATFORM=offscreen APPIMAGE_EXTRACT_AND_RUN=1 \
+XDG_DATA_HOME="$WORK/data" XDG_CONFIG_HOME="$WORK/config" \
+    QT_QPA_PLATFORM=offscreen APPIMAGE_EXTRACT_AND_RUN=1 \
     "$ARTIFACT" --self-test
 
 echo "AppImage verification passed: $ARTIFACT"

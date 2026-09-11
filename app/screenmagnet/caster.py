@@ -30,18 +30,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QProcess, Signal
+from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Signal
+
+from . import windows_runtime
 
 IS_WINDOWS = sys.platform.startswith("win")
 
 CONTAINER = os.environ.get("SCREENMAGNET_CONTAINER", "screenmagnet")
 
-# Where the sender lives. Override with SCREENMAGNET_DOUBLETAKE -- there is no
-# conventional location for it once this is packaged/installed.
-DOUBLETAKE_DIR = Path(
-    os.environ.get("SCREENMAGNET_DOUBLETAKE")
-    or (Path.home() / ".local/share/screenmagnet/doubletake")
-)
+# Installed Windows builds find their sibling sender without a registry value.
+DOUBLETAKE_DIR = windows_runtime.sender_directory()
 BINARY = DOUBLETAKE_DIR / "bin" / ("doubletake.exe" if IS_WINDOWS else "doubletake")
 
 _H264_ENCODERS = ("x264enc", "openh264enc", "vah264enc", "vaapih264enc")
@@ -70,7 +68,8 @@ def _has_native_encoder() -> bool:
     for name in _H264_ENCODERS:
         try:
             if subprocess.run(
-                [gst_inspect, name], capture_output=True, timeout=5
+                [gst_inspect, name], capture_output=True, timeout=5,
+                env=windows_runtime.child_environment(),
             ).returncode == 0:
                 return True
         except (OSError, subprocess.TimeoutExpired):
@@ -86,13 +85,13 @@ def _runs_natively() -> bool:
 def preflight() -> list[str]:
     """Return a list of problems that would stop a cast, empty if we're good."""
     problems = []
-    if not BINARY.exists():
+    if not BINARY.is_file():
         problems.append(f"doubletake binary missing at {BINARY}")
     if IS_WINDOWS:
-        if not shutil.which("gst-launch-1.0.exe"):
+        if windows_runtime.gstreamer_bin() is None:
             problems.append(
-                "gst-launch-1.0.exe not on PATH — install GStreamer for Windows "
-                "(runtime, with the 'bad' and 'ugly' plugin sets)"
+                "GStreamer runtime was not found. Run ScreenMagnet Setup to install "
+                "the official Windows runtime, or set SCREENMAGNET_GSTREAMER to its folder."
             )
     elif _has_native_encoder():
         if not shutil.which("gst-launch-1.0"):
@@ -110,6 +109,11 @@ def preflight() -> list[str]:
 def _sender_argv(args: list[str]) -> tuple[str, list[str]]:
     """Build the (program, argv) pair that runs doubletake on this platform."""
     if _runs_natively():
+        if IS_WINDOWS:
+            # The Go sender's default is independent of cwd (it consults
+            # XDG_CONFIG_HOME/USERPROFILE). Pin credentials to our user data.
+            credentials = windows_runtime.sender_working_directory() / 'credentials.json'
+            args = [*args, '-creds', str(credentials)]
         return str(BINARY), args
     inner = (
         f"cd {shlex.quote(str(DOUBLETAKE_DIR))} && "
@@ -177,23 +181,64 @@ class Caster(QObject):
         if pin:
             args += ["-pin", pin, "-pair"]
 
-        program, argv = _sender_argv(args)
-
+        try:
+            working_directory = windows_runtime.sender_working_directory() if _runs_natively() else None
+            program, argv = _sender_argv(args)
+        except OSError as exc:
+            self.failed.emit(f"Cannot prepare sender data directory: {exc}")
+            return
         self._proc = QProcess(self)
+        proc = self._proc
         self._proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        if _runs_natively():
-            self._proc.setWorkingDirectory(str(DOUBLETAKE_DIR))
+        if working_directory is not None:
+            self._proc.setWorkingDirectory(str(working_directory))
+        environment = QProcessEnvironment()
+        for key, value in windows_runtime.child_environment().items():
+            environment.insert(key, value)
+        self._proc.setProcessEnvironment(environment)
         self._proc.readyReadStandardOutput.connect(self._on_output)
         self._proc.finished.connect(self._on_finished)
-        self._proc.start(program, argv)
+        self._proc.errorOccurred.connect(lambda error, process=proc: self._on_process_error(process, error))
+        try:
+            with windows_runtime.external_dll_search():
+                proc.start(program, argv)
+                if IS_WINDOWS:
+                    proc.waitForStarted(5000)
+        except OSError as exc:
+            self._proc = None
+            proc.deleteLater()
+            self.failed.emit(f"Could not start the sender: {exc}")
+
+    def _on_process_error(self, proc, error):
+        if proc is not self._proc:
+            return
+        if not self._reported_fatal:
+            self._reported_fatal = True
+            self.failed.emit(f"Sender process error: {proc.errorString()}")
+        if error == QProcess.ProcessError.FailedToStart:
+            self._proc = None
+            proc.deleteLater()
+            self.stopped.emit()
 
     def stop(self):
         if not self._proc:
             return
         proc, self._proc = self._proc, None
+        if IS_WINDOWS and proc.processId():
+            # Go's child GStreamer process must stop with this owned session.
+            # No process-name matching: terminate only this sender's process tree.
+            try:
+                with windows_runtime.external_dll_search():
+                    subprocess.run(['taskkill.exe', '/PID', str(proc.processId()), '/T', '/F'],
+                                   capture_output=True, timeout=5,
+                                   creationflags=subprocess.CREATE_NO_WINDOW)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
         proc.terminate()
         if not proc.waitForFinished(4000):
             proc.kill()
+            proc.waitForFinished(1000)
+        proc.deleteLater()
         self._reap_orphans()
         self.stopped.emit()
 
@@ -203,7 +248,8 @@ class Caster(QObject):
         if _runs_natively():
             return
         try:
-            out = subprocess.run(["ps", "-eo", "pid,cmd"], capture_output=True, text=True).stdout
+            out = subprocess.run(["ps", "-eo", "pid,cmd"], capture_output=True, text=True,
+                                 env=windows_runtime.child_environment()).stdout
             for line in out.splitlines():
                 if "bin/doubletake" in line and "grep" not in line:
                     try:

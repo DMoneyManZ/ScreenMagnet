@@ -1,161 +1,245 @@
-name: Build release installers
+name: Verified preview packages
 
 on:
+  workflow_dispatch:
+    inputs:
+      draft_tag:
+        description: 'Existing private draft tag prepared for this exact commit (optional)'
+        required: false
+        type: string
+      platform:
+        description: 'Package to verify'
+        type: choice
+        options: [all, linux, windows]
+        default: all
   push:
     tags: ["v*"]
-  workflow_dispatch: {}
 
 permissions:
   contents: read
 
 jobs:
-  version-check:
+  prepare:
+    if: github.repository == 'DMoneyManZ/ScreenMagnet'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.draft.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Require matching application, package and tag versions
-        env:
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Check release version
         run: |
           python3 - <<'PY'
-          import ast
-          import os
-          import pathlib
-          import tomllib
-
-          init_tree = ast.parse(pathlib.Path("app/screenmagnet/__init__.py").read_text())
-          app_version = next(
-              ast.literal_eval(node.value)
-              for node in init_tree.body
-              if isinstance(node, ast.Assign)
-              and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets)
-          )
-          with pathlib.Path("pyproject.toml").open("rb") as handle:
-              project_version = tomllib.load(handle)["project"]["version"]
-          if app_version != project_version:
-              raise SystemExit(
-                  f"version mismatch: app={app_version!r}, pyproject={project_version!r}"
-              )
-          if os.environ["REF_TYPE"] == "tag":
-              tag_version = os.environ["REF_NAME"].removeprefix("v").split("-", 1)[0]
-              if tag_version != app_version:
-                  raise SystemExit(
-                      f"tag mismatch: tag={os.environ['REF_NAME']!r}, app={app_version!r}"
-                  )
-          print(f"release version validated: {app_version}")
+          import ast,pathlib,tomllib
+          tree=ast.parse(pathlib.Path('app/screenmagnet/__init__.py').read_text())
+          version=next(ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='__version__' for t in n.targets))
+          assert version==tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version']
+          print('Preview version:',version)
           PY
-
-  windows:
-    needs: version-check
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install Python dependencies
+      - name: Create draft for reviewed downloads
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXISTING_DRAFT: ${{ inputs.draft_tag }}
         run: |
-          python -m pip install --upgrade pip
-          pip install PySide6==6.11.1 zeroconf==0.150.0 pyinstaller==6.22.2
-
-      - name: Freeze the app with PyInstaller
-        shell: pwsh
-        # --icon/--add-data are resolved relative to --specpath, not the working
-        # directory, so these must be absolute or the build fails looking for
-        # packaging/windows/app/assets.
-        run: |
-          pyinstaller `
-            --name ScreenMagnet `
-            --windowed --onedir --noconfirm `
-            --icon "$env:GITHUB_WORKSPACE\app\assets\screenmagnet.ico" `
-            --add-data "$env:GITHUB_WORKSPACE\app\assets;assets" `
-            --paths "$env:GITHUB_WORKSPACE\app" `
-            --distpath "packaging/windows/dist" `
-            --workpath "packaging/windows/build" `
-            --specpath "packaging/windows" `
-            "$env:GITHUB_WORKSPACE\packaging\pyinstaller_entry.py"
-
-      - name: Download GStreamer runtime + VC++ redistributable
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path packaging/windows/prereqs | Out-Null
-          Invoke-WebRequest -UseBasicParsing -Uri "https://gstreamer.freedesktop.org/data/pkg/windows/1.28.5/msvc/gstreamer-1.0-msvc-x86_64-1.28.5.exe" -OutFile "packaging/windows/prereqs/gstreamer-1.0-msvc-x86_64-1.28.5.exe"
-          Invoke-WebRequest -UseBasicParsing -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "packaging/windows/prereqs/vc_redist.x64.exe"
-
-      - name: Install Inno Setup
-        run: choco install innosetup -y --no-progress
-
-      - name: Compile installer
-        shell: pwsh
-        run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\windows\installer.iss
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ScreenMagnet-Setup-windows
-          path: packaging/windows/output/ScreenMagnet-Setup.exe
+          if [ -n "$EXISTING_DRAFT" ]; then
+            gh release view "$EXISTING_DRAFT" --repo "$GITHUB_REPOSITORY" --json isDraft,targetCommitish > "$RUNNER_TEMP/draft.json"
+            python3 -c 'import json,os; d=json.load(open(os.environ["RUNNER_TEMP"]+"/draft.json")); assert d["isDraft"] and d["targetCommitish"]==os.environ["GITHUB_SHA"], "Draft does not match this build"'
+            echo "tag=$EXISTING_DRAFT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tag="preview-build-${{ github.run_id }}-${{ github.run_attempt }}"
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --prerelease --title "ScreenMagnet preview build ${{ github.run_id }}" --notes "Release-readiness build from $GITHUB_SHA. Packages are staged for review; live receiver, pairing, audio and multi-monitor validation remain necessary."
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   linux:
-    needs: version-check
-    # Build on the oldest supported Ubuntu so the frozen payload does not pick
-    # up a newer glibc baseline than users have.
+    if: inputs.platform != 'windows'
+    needs: prepare
     runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26"
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Build doubletake (pure Go, no cgo -- distrobox is a runtime-only fallback)
-        run: |
-          git clone https://github.com/omarroth/doubletake /tmp/doubletake
-          cd /tmp/doubletake
-          git checkout 8ccea5fb2a72765502f351595765812030efed5d
-          git apply "$GITHUB_WORKSPACE/patches/0001-screenmagnet-fixes.patch"
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/doubletake-linux ./cmd/doubletake
-
-      - name: Build the AppImage
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            appstream desktop-file-utils libegl1 libxkbcommon-x11-0 \
-            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
-            libxcb-render-util0 libxcb-shape0 libxcb-util1 libxcb-xkb1
-          bash packaging/linux/build-appimage.sh /tmp/doubletake-linux
-
-      - name: Verify the AppImage
-        run: bash packaging/linux/verify-appimage.sh packaging/linux/dist/ScreenMagnet-x86_64.AppImage
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ScreenMagnet-x86_64-AppImage
-          path: |
-            packaging/linux/dist/ScreenMagnet-x86_64.AppImage
-            packaging/linux/dist/ScreenMagnet-x86_64.AppImage.sha256
-
-  release:
-    needs: [version-check, windows, linux]
-    runs-on: ubuntu-24.04
-    if: startsWith(github.ref, 'refs/tags/v')
+    timeout-minutes: 35
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          path: artifacts
-      - uses: softprops/action-gh-release@v2
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
-          files: |
-            artifacts/ScreenMagnet-Setup-windows/ScreenMagnet-Setup.exe
-            artifacts/ScreenMagnet-x86_64-AppImage/ScreenMagnet-x86_64.AppImage
-            artifacts/ScreenMagnet-x86_64-AppImage/ScreenMagnet-x86_64.AppImage.sha256
+          python-version: '3.13'
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.26'
+          cache: false
+      - name: Install build libraries and Python packages
+        run: |
+          awk '/^deb / {$1="deb-src"; print}' /etc/apt/sources.list | sudo tee /etc/apt/sources.list.d/screenmagnet-source.list >/dev/null
+          test -s /etc/apt/sources.list.d/screenmagnet-source.list
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y appstream desktop-file-utils libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-util1 libxcb-xkb1
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+          python -m pip install -r packaging/linux/requirements-build.txt
+      - name: Test application and packaging helpers
+        env:
+          PYTHONPATH: app
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python app/tests/ci_smoke_test.py
+          python -m unittest discover -s app/tests -p 'test_*.py' -v
+      - name: Build matching sender and source payload
+        run: |
+          mkdir -p build
+          git clone https://github.com/omarroth/doubletake.git build/doubletake
+          git -C build/doubletake checkout 8ccea5fb2a72765502f351595765812030efed5d
+          git -C build/doubletake apply "$GITHUB_WORKSPACE/patches/0001-screenmagnet-fixes.patch"
+          cd build/doubletake
+          go mod vendor
+          CGO_ENABLED=0 go build -trimpath -o bin/doubletake ./cmd/doubletake
+          cd ../..
+      - name: Build and verify AppImage
+        run: |
+          PYTHON=python SCREENMAGNET_DOUBLETAKE_SOURCE="$GITHUB_WORKSPACE/build/doubletake" bash packaging/linux/build-appimage.sh build/doubletake/bin/doubletake
+          bash packaging/linux/verify-appimage.sh packaging/linux/dist/ScreenMagnet-x86_64.AppImage
+          QT_QPA_PLATFORM=offscreen APPIMAGE_EXTRACT_AND_RUN=1 XDG_DATA_HOME="$RUNNER_TEMP/capture-data" XDG_CONFIG_HOME="$RUNNER_TEMP/capture-config" packaging/linux/dist/ScreenMagnet-x86_64.AppImage --self-test --require-capture-runtime --report packaging/linux/dist/Linux-Ubuntu22-validation.json
+          cp packaging/linux/install-appimage.sh screenmagnet-linux.sh app/assets/screenmagnet.svg docs/INSTALL.md packaging/linux/dist/
+      - name: Stage Linux downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRAFT_TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release upload "$DRAFT_TAG" packaging/linux/dist/* --repo "$GITHUB_REPOSITORY"
+
+  windows:
+    if: inputs.platform != 'linux'
+    needs: prepare
+    runs-on: windows-2022
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.26'
+          cache: false
+      - name: Install Python packages and test helpers
+        env:
+          PYTHONPATH: app
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m pip install -r packaging/linux/requirements-build.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
+          python -m unittest discover -s app/tests -p 'test_*.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Application tests failed' }
+      - name: Build matching sender and source payload
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          git clone https://github.com/omarroth/doubletake.git build/doubletake
+          if ($LASTEXITCODE -ne 0) { throw 'Sender clone failed' }
+          git -C build/doubletake checkout 8ccea5fb2a72765502f351595765812030efed5d
+          if ($LASTEXITCODE -ne 0) { throw 'Sender revision failed' }
+          git -C build/doubletake apply "$env:GITHUB_WORKSPACE/patches/0001-screenmagnet-fixes.patch"
+          if ($LASTEXITCODE -ne 0) { throw 'Sender patch failed' }
+          Push-Location build/doubletake
+          go mod vendor
+          if ($LASTEXITCODE -ne 0) { throw 'Sender vendoring failed' }
+          $env:CGO_ENABLED='0'
+          go build -trimpath -o bin/doubletake.exe ./cmd/doubletake
+          if ($LASTEXITCODE -ne 0) { throw 'Sender build failed' }
+          Pop-Location
+          python packaging/stage_release_data.py --doubletake-source build/doubletake --output build/release-data
+          if ($LASTEXITCODE -ne 0) { throw 'Source staging failed' }
+      - name: Verify and install official capture prerequisites
+        run: ./packaging/windows/install-prerequisites.ps1 -ManifestOutput build/windows-prerequisites.json -DownloadDirectory build/windows-prerequisites -Install
+      - name: Build and test Windows setup
+        run: ./packaging/windows/build.ps1 -PrerequisiteManifest build/windows-prerequisites.json
+      - name: Verify frozen and installed Windows application
+        run: |
+          Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
+          Remove-Item Env:SCREENMAGNET_DOUBLETAKE -ErrorAction SilentlyContinue
+          $Validation = Join-Path $env:GITHUB_WORKSPACE 'build/windows-validation'
+          New-Item -ItemType Directory -Force $Validation | Out-Null
+          function Test-App([string]$Exe, [string]$Name) {
+            $Report = Join-Path $Validation "$Name.json"
+            $Process = Start-Process -FilePath $Exe -ArgumentList ('--self-test --report "' + $Report + '"') -PassThru
+            if (!$Process.WaitForExit(90000)) { $Process.Kill(); throw "$Name timed out" }
+            $Process.Refresh()
+            if ($Process.ExitCode -ne 0) { throw "$Name failed: $($Process.ExitCode)" }
+            $Result = Get-Content $Report -Raw | ConvertFrom-Json
+            if (!$Result.passed -or $Result.qt_platform -ne 'windows' -or !$Result.synthetic_video_encode) { throw "$Name did not pass native runtime checks" }
+          }
+          Test-App "$env:GITHUB_WORKSPACE/packaging/windows/dist/ScreenMagnet/ScreenMagnet.exe" 'frozen'
+          $InstallDir = Join-Path $env:RUNNER_TEMP 'ScreenMagnet installed preview'
+          $Setup = Start-Process -FilePath 'packaging/windows/output/ScreenMagnet-Setup.exe' -ArgumentList ('/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="' + $InstallDir + '"') -Wait -PassThru
+          if ($Setup.ExitCode -notin @(0,3010)) { throw "Setup failed: $($Setup.ExitCode)" }
+          Test-App (Join-Path $InstallDir 'ScreenMagnet.exe') 'installed'
+          $StateDir = Join-Path $env:LOCALAPPDATA 'ScreenMagnet/sender-state'
+          New-Item -ItemType Directory -Force $StateDir | Out-Null
+          'keep' | Set-Content (Join-Path $StateDir 'test-retained.txt')
+          $Uninstall = Start-Process -FilePath (Join-Path $InstallDir 'unins000.exe') -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
+          if ($Uninstall.ExitCode -notin @(0,3010)) { throw 'Uninstall failed' }
+          if (Test-Path (Join-Path $InstallDir 'ScreenMagnet.exe')) { throw 'Uninstall left the executable' }
+          if (!(Test-Path (Join-Path $StateDir 'test-retained.txt'))) { throw 'Uninstall removed user state' }
+          Compress-Archive -Path "$Validation/*" -DestinationPath packaging/windows/output/Windows-validation.zip
+      - name: Stage Windows downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRAFT_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          $Assets = @(Get-ChildItem packaging/windows/output -File | ForEach-Object { $_.FullName })
+          gh release upload $env:DRAFT_TAG @Assets --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'Windows package upload failed' }
+
+  ubuntu-24-runtime:
+    needs: [prepare, linux]
+    timeout-minutes: 20
+    permissions:
+      contents: write # Draft release assets require repository push access.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Download the actual draft AppImage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRAFT_TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release download "$DRAFT_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'ScreenMagnet-x86_64.AppImage*' --pattern 'ScreenMagnet-Linux-Corresponding-Source.tar.gz*' --pattern install-appimage.sh --pattern screenmagnet.svg --dir artifact
+      - name: Install desktop runtime libraries
+        run: |
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y desktop-file-utils libegl1 libfuse2t64 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-util1 libxcb-xkb1
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+      - name: Test extracted and FUSE startup
+        run: |
+          bash packaging/linux/verify-appimage.sh artifact/ScreenMagnet-x86_64.AppImage
+          export XDG_DATA_HOME="$RUNNER_TEMP/screenmagnet-data"
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/screenmagnet-config"
+          export QT_QPA_PLATFORM=offscreen
+          if [ -r /dev/fuse ] && [ -w /dev/fuse ]; then
+            artifact/ScreenMagnet-x86_64.AppImage --self-test
+          else
+            echo 'FUSE device unavailable; extract-and-run is the validated runtime route.'
+          fi
+          bash artifact/install-appimage.sh
+          desktop-file-validate "$XDG_DATA_HOME/applications/screenmagnet.desktop"
+          "$XDG_DATA_HOME/screenmagnet/screenmagnet" --self-test --require-capture-runtime --report artifact/Linux-Ubuntu24-validation.json
+          mkdir -p "$XDG_CONFIG_HOME/screenmagnet"
+          echo keep > "$XDG_CONFIG_HOME/screenmagnet/test-retained"
+          bash artifact/install-appimage.sh --uninstall
+          test ! -e "$XDG_DATA_HOME/applications/screenmagnet.desktop"
+          test -f "$XDG_CONFIG_HOME/screenmagnet/test-retained"
+      - name: Save Ubuntu runtime evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRAFT_TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release upload "$DRAFT_TAG" artifact/Linux-Ubuntu24-validation.json --repo "$GITHUB_REPOSITORY"

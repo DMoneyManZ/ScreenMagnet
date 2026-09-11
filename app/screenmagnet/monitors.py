@@ -20,6 +20,8 @@ import re
 import subprocess
 from dataclasses import dataclass
 
+from . import windows_runtime
+
 # "DisplayPort-1 connected primary 1920x1080+0+0 (normal left ...)"
 _GEOM = re.compile(
     r"^(?P<name>\S+)\s+connected\s+(?P<primary>primary\s+)?"
@@ -76,7 +78,8 @@ def _from_xrandr() -> list[Monitor]:
     """Fallback for when Qt isn't up yet. X11 only; already physical pixels."""
     try:
         out = subprocess.run(
-            ["xrandr", "--query"], capture_output=True, text=True, timeout=6
+            ["xrandr", "--query"], capture_output=True, text=True, timeout=6,
+            env=windows_runtime.child_environment(),
         ).stdout
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return []

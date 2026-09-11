@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build a Linux AppImage for ScreenMagnet. Must run on Linux (CI does this on
-# Ubuntu 22.04; run it yourself on any glibc-based x86_64 Linux host with
-# Python 3.13 or 3.14 and curl).
+# Ubuntu 22.04, with deb-src repositories enabled so bundled libraries have
+# matching source packages). Python 3.13, Go, curl and apt/dpkg are build tools;
+# they are not required to launch the finished AppImage.
 #
 # Usage: packaging/linux/build-appimage.sh <path-to-doubletake-linux-binary>
 #
@@ -32,13 +33,13 @@ rm -rf "$APPDIR" "$DIST" "$HERE/build-venv" "$HERE/frozen" "$HERE/build"
 mkdir -p "$APPDIR/usr/bin" "$DIST"
 
 # The official artifact is frozen with 3.13 for a stable build baseline. 3.14
-# is also tested in CI and is accepted for local builds. PyInstaller embeds the
+# is also tested in CI for source runs. PyInstaller embeds the
 # selected interpreter, so the finished AppImage never imports host Python.
 if [ -n "${PYTHON:-}" ]; then
     PYTHON_BIN="$PYTHON"
 else
     PYTHON_BIN=""
-    for candidate in python3.13 python3.14; do
+    for candidate in python3.13; do
         if command -v "$candidate" >/dev/null 2>&1; then
             PYTHON_BIN="$candidate"
             break
@@ -49,7 +50,7 @@ if [ -z "$PYTHON_BIN" ] || ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
     cat >&2 <<HINT
 error: no supported Python interpreter found.
 
-Use Python 3.13 (release baseline) or 3.14. These require no system-wide
+Use Python 3.13 (release baseline). These require no system-wide
 installation when uv or pyenv is available:
 
     uv python install 3.13
@@ -63,14 +64,27 @@ HINT
 fi
 PYTHON_VERSION="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 case "$PYTHON_VERSION" in
-    3.13|3.14) ;;
-    *) echo "error: Python 3.13 or 3.14 required; got $PYTHON_VERSION" >&2; exit 1 ;;
+    3.13) ;;
+    *) echo "error: Python 3.13 required for release source staging; got $PYTHON_VERSION" >&2; exit 1 ;;
 esac
 
 echo "=== 1/4 freezing the app with PyInstaller ==="
 "$PYTHON_BIN" -m venv "$HERE/build-venv"
 "$HERE/build-venv/bin/pip" install --upgrade pip >/dev/null
 "$HERE/build-venv/bin/pip" install -r "$HERE/requirements-build.txt"
+
+# Always stage current sources into the freshly cleared build directory. Reusing
+# a previous payload after editing app code would distribute mismatched sources.
+RELEASE_DATA="$HERE/build/release-data"
+SENDER_SOURCE="${SCREENMAGNET_DOUBLETAKE_SOURCE:-${XDG_CACHE_HOME:-$HOME/.cache}/screenmagnet/doubletake-src}"
+[ -f "$SENDER_SOURCE/vendor/modules.txt" ] || {
+    echo "Matching sender source/vendor required. Run install-doubletake.sh or set SCREENMAGNET_DOUBLETAKE_SOURCE." >&2
+    exit 1
+}
+export PATH="${XDG_DATA_HOME:-$HOME/.local/share}/screenmagnet/toolchain/go/bin:$PATH"
+"$HERE/build-venv/bin/python" "$REPO/packaging/stage_release_data.py" \
+    --doubletake-source "$SENDER_SOURCE" --output "$RELEASE_DATA"
+
 
 "$HERE/build-venv/bin/pyinstaller" \
     --name ScreenMagnet \
@@ -84,6 +98,20 @@ echo "=== 1/4 freezing the app with PyInstaller ==="
     "$REPO/packaging/pyinstaller_entry.py"
 
 cp -r "$HERE/frozen/ScreenMagnet/." "$APPDIR/usr/bin/"
+
+for required in source licenses THIRD-PARTY-NOTICES.md; do
+    [ -e "$RELEASE_DATA/$required" ] || { echo "Missing release source/notices: $RELEASE_DATA/$required" >&2; exit 1; }
+done
+mkdir -p "$APPDIR/usr/share/screenmagnet"
+cp -r "$RELEASE_DATA/." "$APPDIR/usr/share/screenmagnet/"
+cp "$REPO/LICENSE" "$APPDIR/usr/share/screenmagnet/LICENSE"
+
+# Account for the actual ELF libraries collected on this builder, including
+# host GTK/GLib and the ICU runtime carried by Qt's wheel.
+"$HERE/build-venv/bin/python" "$HERE/stage_system_sources.py" \
+    --frozen "$HERE/frozen/ScreenMagnet" \
+    --output "$APPDIR/usr/share/screenmagnet"
+
 
 echo "=== 2/4 bundling doubletake ==="
 mkdir -p "$APPDIR/usr/bin/doubletake/bin"
@@ -121,6 +149,12 @@ exec "$HERE/usr/bin/ScreenMagnet" "$@"
 EOF
 chmod +x "$APPDIR/AppRun"
 
+APPIMAGE_RUNTIME="$("$HERE/build-venv/bin/python" "$HERE/stage_appimage_runtime.py" \
+    --output "$APPDIR/usr/share/screenmagnet" --cache "$REPO/build/appimage-runtime-cache")"
+
+"$HERE/build-venv/bin/python" "$HERE/package_source_archive.py" \
+    --payload "$APPDIR/usr/share/screenmagnet" --dist "$DIST"
+
 echo "=== 4/4 packaging the AppImage ==="
 if [ ! -x "$HERE/appimagetool.AppImage" ]; then
     curl -fL -o "$HERE/appimagetool.AppImage" \
@@ -138,7 +172,7 @@ echo "$APPIMAGETOOL_SHA256  $HERE/appimagetool.AppImage" | sha256sum --check --s
 # ship only FUSE 3, so the plain invocation dies with "dlopen(): error loading
 # libfuse.so.2". This flag unpacks the tool and runs it directly -- no FUSE needed.
 ARCH=x86_64 "$HERE/appimagetool.AppImage" --appimage-extract-and-run \
-    "$APPDIR" "$DIST/ScreenMagnet-x86_64.AppImage"
+    --runtime-file "$APPIMAGE_RUNTIME" "$APPDIR" "$DIST/ScreenMagnet-x86_64.AppImage"
 (
     cd "$DIST"
     sha256sum ScreenMagnet-x86_64.AppImage > ScreenMagnet-x86_64.AppImage.sha256

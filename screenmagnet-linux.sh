@@ -7,6 +7,7 @@ DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 VENV="${SCREENMAGNET_VENV:-$DATA_HOME/screenmagnet/venv}"
 DOUBLETAKE_DIR="${SCREENMAGNET_DOUBLETAKE:-$DATA_HOME/screenmagnet/doubletake}"
 APPIMAGE_DEFAULT="$ROOT/packaging/linux/dist/ScreenMagnet-x86_64.AppImage"
+APPIMAGE_INSTALLED="$DATA_HOME/screenmagnet/ScreenMagnet-x86_64.AppImage"
 APPIMAGE="${SCREENMAGNET_APPIMAGE:-$APPIMAGE_DEFAULT}"
 
 # Must match caster.py's CONTAINER, or the app looks for a box setup-steamos never made.
@@ -164,6 +165,10 @@ doctor() {
 install_native_deps() {
     local id
     id="$(os_id)"
+    if [ -e /run/ostree-booted ]; then
+        echo 'This is an immutable host; use setup-steamos for the capture container.' >&2
+        return 1
+    fi
     say "Installing native capture dependencies for $id"
     case "$id" in
         ubuntu|debian|linuxmint|pop)
@@ -193,8 +198,8 @@ install_native_deps() {
                 xcb-util-renderutil xcb-util-wm gstreamer gst-plugins-base \
                 gst-plugins-good gst-plugins-bad gst-plugins-ugly
             ;;
-        steamos)
-            echo 'SteamOS has a read-only base system; use setup-steamos instead.' >&2
+        steamos|bazzite)
+            echo 'Use setup-steamos for SteamOS/Bazzite capture dependencies; the host is left unchanged.' >&2
             return 1
             ;;
         *)
@@ -285,6 +290,10 @@ find_appimage() {
         printf '%s' "$APPIMAGE"
         return
     fi
+    if [ -f "$APPIMAGE_INSTALLED" ]; then
+        printf '%s' "$APPIMAGE_INSTALLED"
+        return
+    fi
     local candidate
     candidate="$(find "$ROOT" -maxdepth 1 -type f -name 'ScreenMagnet*.AppImage' -print -quit)"
     [ -n "$candidate" ] && printf '%s' "$candidate"
@@ -323,8 +332,7 @@ build_appimage() {
     }
     [ -x "$DOUBLETAKE_DIR/bin/doubletake" ] || \
         SCREENMAGNET_DOUBLETAKE="$DOUBLETAKE_DIR" "$ROOT/packaging/linux/install-doubletake.sh"
-    PYTHON="${PYTHON:-$(find_python)}" \
-        "$ROOT/packaging/linux/build-appimage.sh" "$DOUBLETAKE_DIR/bin/doubletake"
+    "$ROOT/packaging/linux/build-appimage.sh" "$DOUBLETAKE_DIR/bin/doubletake"
     bash "$ROOT/packaging/linux/verify-appimage.sh" "$APPIMAGE_DEFAULT"
 }
 

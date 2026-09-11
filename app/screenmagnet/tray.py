@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import (
     QAction,
@@ -674,6 +676,10 @@ class ScreenMagnetTray(QSystemTrayIcon):
 
     # -- self-update ---------------------------------------------------------
     def check_for_updates(self):
+        if getattr(sys, "frozen", False):
+            if self.settings_window is not None:
+                self.settings_window.set_update_status("Download the latest installer or AppImage from Releases.")
+            return
         if self._update_check_worker is not None and self._update_check_worker.isRunning():
             return
         if self.settings_window is not None:

@@ -29,6 +29,10 @@ test -x "$ROOT/usr/bin/ScreenMagnet"
 test -x "$ROOT/usr/bin/doubletake/bin/doubletake"
 test -f "$ROOT/screenmagnet.desktop"
 test -f "$ROOT/screenmagnet.svg"
+test -f "$ROOT/usr/share/screenmagnet/LICENSE"
+test -f "$ROOT/usr/share/screenmagnet/THIRD-PARTY-NOTICES.md"
+test -d "$ROOT/usr/share/screenmagnet/source"
+test -d "$ROOT/usr/share/screenmagnet/licenses"
 test -f "$ROOT/usr/share/metainfo/io.github.DMoneyManZ.ScreenMagnet.metainfo.xml"
 
 if grep -Eq '@EXEC@|@WORKDIR@' "$ROOT/screenmagnet.desktop"; then
@@ -54,7 +58,8 @@ if [ -f "$CHECKSUM" ]; then
 fi
 
 # This path deliberately proves that FUSE is not required for the fallback.
-QT_QPA_PLATFORM=offscreen APPIMAGE_EXTRACT_AND_RUN=1 \
+XDG_DATA_HOME="$WORK/data" XDG_CONFIG_HOME="$WORK/config" \
+    QT_QPA_PLATFORM=offscreen APPIMAGE_EXTRACT_AND_RUN=1 \
     "$ARTIFACT" --self-test
 
 echo "AppImage verification passed: $ARTIFACT"

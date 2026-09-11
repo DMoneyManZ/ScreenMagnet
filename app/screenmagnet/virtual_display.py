@@ -85,11 +85,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 INSTALLER_ZIP = REPO_ROOT / "packaging" / "windows" / "vendor" / "VirtualDisplayDriver-installer.zip"
 
 NOT_INSTALLED_MSG = (
-    "Extended display needs a one-time driver install (the free, open-source "
-    "VirtualDrivers virtual display driver) -- this session can't do that for you. "
-    f'Unzip "{INSTALLER_ZIP.name}" and run "VDD Control.exe" from inside it once; it '
-    "installs itself and will ask Windows for admin (one UAC click). Then quit and "
-    f"restart ScreenMagnet to pick it up. Full path: {INSTALLER_ZIP}"
+    "Extended display is an experimental preview and needs the optional "
+    "VirtualDrivers virtual display driver. It is not included with ScreenMagnet. "
+    "Download VDD Control from https://github.com/VirtualDrivers/Virtual-Display-Driver/releases, "
+    "follow that project's installation instructions, then restart ScreenMagnet. "
+    "Installing a display driver requires Windows administrator approval. "
+    "Mirror casting does not require this driver."
 )
 
 NOT_ENABLED_MSG = (

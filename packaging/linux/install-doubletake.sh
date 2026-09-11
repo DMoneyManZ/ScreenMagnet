@@ -76,6 +76,7 @@ done
 
 # --- build ----------------------------------------------------------------
 say "building"
+( cd "$SRC" && "$GO" mod vendor )
 mkdir -p "$DEST/bin"
 ( cd "$SRC" && GOFLAGS=-trimpath "$GO" build -o "$DEST/bin/doubletake" ./cmd/doubletake )
 if [ -d "$SRC/cmd/doubletake-ctl" ]; then

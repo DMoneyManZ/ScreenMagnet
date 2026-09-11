@@ -1,8 +1,7 @@
 """ScreenMagnet settings / about window.
 
 A standalone QDialog: version + creator info, a GitHub/contact section, a
-changelog reader, update-check UI, a "launch at startup" checkbox, a
-dev-only donation stub, and copyright notices.
+changelog reader, update-check UI, a "launch at startup" checkbox, and copyright notices.
 
 Scope note: this file owns UI only. It does NOT check GitHub for updates,
 does NOT run git, and does NOT touch the Windows Registry -- whatever
@@ -17,7 +16,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from urllib.parse import quote
 
 from PySide6 import QtSvg  # noqa: F401 -- side-effect import: registers the SVG
 # icon-engine plugin (qsvgicon), same reasoning as tray.py's app_icon() --
@@ -25,7 +23,6 @@ from PySide6 import QtSvg  # noqa: F401 -- side-effect import: registers the SVG
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import (
     QDesktopServices,
-    QDoubleValidator,
     QIcon,
 )
 from PySide6.QtWidgets import (
@@ -36,7 +33,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
     QScrollArea,
     QTextBrowser,
@@ -53,23 +49,14 @@ APP_NAME = "ScreenMagnet"
 CREATOR = "DMoneyManZ"
 GITHUB_URL = "https://github.com/DMoneyManZ/ScreenMagnet"
 CONTACT_EMAIL = "drmedison@icloud.com"
+SUPPORT_URL = 'https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=demurphy242%40gmail.com&item_name=Support+ScreenMagnet+development&currency_code=USD'
 
 # app/screenmagnet/settings_window.py -> repo root
 CHANGELOG_PATH = Path(__file__).resolve().parent.parent.parent / "CHANGELOG.md"
 CHANGELOG_PLACEHOLDER = (
-    "*No CHANGELOG.md yet.* Add one at the repo root and it will show up "
-    "here automatically -- nothing fabricated in its place."
+    "See the project Releases page for preview changes and known limitations."
 )
 
-# ------------------------------------------------------------------------
-# TEST/DEV-ONLY DONATION STUB. Do not ship this in a real release build.
-# No real PayPal.me link exists yet, so this points at an obviously-fake
-# placeholder. Nothing here charges or transmits anything -- clicking a
-# button just opens this URL in the user's browser.
-# TODO(pre-release): replace PAYPAL_DONATE_BASE with a real link, or remove
-# the whole donation card, before ScreenMagnet ever ships as v1.0.
-# ------------------------------------------------------------------------
-PAYPAL_DONATE_BASE = "https://paypal.me/PLACEHOLDER"
 
 
 def _card(title: str | None = None) -> tuple[QFrame, QVBoxLayout]:
@@ -177,7 +164,7 @@ class SettingsWindow(QDialog):
         root.addWidget(self._build_update_card())
         root.addWidget(self._build_appearance_card())
         root.addWidget(self._build_startup_card())
-        root.addWidget(self._build_donation_card())
+        root.addWidget(self._build_support_card())
         root.addWidget(self._build_copyright_card())
         root.addStretch(1)
 
@@ -211,7 +198,7 @@ class SettingsWindow(QDialog):
         # Dev/test version number the user chose explicitly -- v1.0 is
         # reserved for the real official release, so this stays visibly
         # below it (screenmagnet.__version__ in __init__.py).
-        version = QLabel(f"v{__version__} (dev/test build)")
+        version = QLabel(f"v{__version__} (preview)")
         version.setEnabled(False)
         col.addWidget(version)
 
@@ -282,7 +269,13 @@ class SettingsWindow(QDialog):
         btn_row = QHBoxLayout()
         self.check_updates_btn = QPushButton("Check for Updates")
         self.check_updates_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.check_updates_btn.clicked.connect(self.check_for_updates_requested.emit)
+        if getattr(sys, "frozen", False):
+            self.check_updates_btn.setText("Download updates")
+            self.update_status_label.setText("Get the latest installer or AppImage from Releases.")
+            self.check_updates_btn.clicked.connect(
+                lambda: QDesktopServices.openUrl(QUrl(GITHUB_URL + "/releases")))
+        else:
+            self.check_updates_btn.clicked.connect(self.check_for_updates_requested.emit)
         btn_row.addWidget(self.check_updates_btn)
 
         self.update_now_btn = QPushButton("Update Now")
@@ -300,7 +293,7 @@ class SettingsWindow(QDialog):
         GitHub releases-API check against origin."""
         self.update_status_label.setText(text)
         self.update_status_label.setStyleSheet("color: palette(link);" if available else "")
-        self.update_now_btn.setVisible(available)
+        self.update_now_btn.setVisible(available and not getattr(sys, "frozen", False))
         self._latest_known = latest
 
     def set_update_result(self, message: str, *, success: bool = True) -> None:
@@ -369,64 +362,16 @@ class SettingsWindow(QDialog):
     def launch_at_startup(self) -> bool:
         return self.startup_checkbox.isChecked()
 
-    # -- donations (TEST/DEV ONLY -- see module-level TODO) -----------------
-    def _build_donation_card(self) -> QFrame:
-        frame, lay = _card("Support ScreenMagnet")
-
-        warn = QLabel(
-            "TEST BUILD ONLY -- placeholder donation links below, not wired "
-            "to a real PayPal account. Not present in any real release."
-        )
-        warn.setWordWrap(True)
-        warn.setStyleSheet("color: #d08a2c; font-weight: bold;")
-        lay.addWidget(warn)
-
-        btn_row = QHBoxLayout()
-        for amount in (5, 10, 25):
-            b = QPushButton(f"${amount}")
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(lambda _checked=False, a=amount: self._open_donate_link(a))
-            btn_row.addWidget(b)
-        lay.addLayout(btn_row)
-
-        custom_row = QHBoxLayout()
-        custom_row.addWidget(QLabel("Custom:"))
-        self.donate_custom_amount = QLineEdit()
-        self.donate_custom_amount.setPlaceholderText("Amount, e.g. 15")
-        self.donate_custom_amount.setValidator(QDoubleValidator(0.01, 100000.0, 2))
-        self.donate_custom_amount.setFixedWidth(90)
-        custom_row.addWidget(self.donate_custom_amount)
-        custom_btn = QPushButton("Donate")
-        custom_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        custom_btn.clicked.connect(self._open_donate_custom)
-        custom_row.addWidget(custom_btn)
-        custom_row.addStretch(1)
-        lay.addLayout(custom_row)
-
-        self.donate_note = QLineEdit()
-        self.donate_note.setPlaceholderText("Optional note")
-        lay.addWidget(self.donate_note)
-
+    def _build_support_card(self) -> QFrame:
+        frame, lay = _card("Support development")
+        text = QLabel("ScreenMagnet is free and open source. Optional contributions help fund maintenance and improvements.")
+        text.setWordWrap(True)
+        lay.addWidget(text)
+        self.support_btn = QPushButton("Support with PayPal")
+        self.support_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.support_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(SUPPORT_URL)))
+        lay.addWidget(self.support_btn)
         return frame
-
-    def _open_donate_link(self, amount: int) -> None:
-        self._open_paypal_placeholder(str(amount))
-
-    def _open_donate_custom(self) -> None:
-        amount = self.donate_custom_amount.text().strip()
-        if not amount:
-            return
-        self._open_paypal_placeholder(amount)
-
-    def _open_paypal_placeholder(self, amount: str) -> None:
-        """Opens the placeholder PayPal.me link (see PAYPAL_DONATE_BASE's
-        TODO) in the user's default browser. Test/dev stub only -- nothing
-        is charged or transmitted by ScreenMagnet itself."""
-        url = f"{PAYPAL_DONATE_BASE}/{amount}"
-        note = self.donate_note.text().strip()
-        if note:
-            url += f"?note={quote(note)}"
-        QDesktopServices.openUrl(QUrl(url))
 
     # -- copyright / license -------------------------------------------------
     def _build_copyright_card(self) -> QFrame:
@@ -439,23 +384,6 @@ class SettingsWindow(QDialog):
         )
         real.setWordWrap(True)
         lay.addWidget(real)
-
-        # --- GOOFY TEST-ONLY notice --------------------------------------
-        # Verbatim per the user's request, for this dev/test build only.
-        # It deliberately contradicts the real GPL-3.0 notice above (the
-        # joke is the contradiction) and MUST be removed before any public
-        # v1.0 release -- it is not a real copyright claim.
-        goofy = QLabel("Copyright (C) 2026 ALL RIGHTS RESERVED. Magnetic Cyber Chameleon LLC")
-        goofy.setWordWrap(True)
-        gf = goofy.font()
-        gf.setItalic(True)
-        goofy.setFont(gf)
-        lay.addWidget(goofy)
-
-        goofy_tag = QLabel("^ test build only, goofy placeholder -- not real, remove before release")
-        goofy_tag.setWordWrap(True)
-        goofy_tag.setEnabled(False)
-        lay.addWidget(goofy_tag)
 
         return frame
 

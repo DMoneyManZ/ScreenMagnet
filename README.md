@@ -12,9 +12,12 @@ Click the tray icon → two arrows chase each other while it scans → your scre
 name → click one. If the TV wants a pairing code, a box appears inline. Pick which monitor
 goes to the TV if you have more than one.
 
-**Status: working.** Mirrors 1920×1080 @ 30 fps with audio (Linux) or video-only (Windows —
-see [Known limitations](#known-limitations)), ~1.0s end-to-end latency, roughly 18% of a
-16-core CPU using software H.264.
+**Status: release-readiness preview (0.84).** Linux has a verified AppImage build.
+Windows packaging is being rebuilt from matching sender source. Real receiver,
+pairing, audio and multi-monitor checks remain required for the new packages.
+The earlier measured Linux cast achieved 1920×1080 at 30 fps with audio and
+roughly 1 second of end-to-end latency; that is one measured setup, not a promise
+for every TV or network.
 
 > Not affiliated with or endorsed by Apple. AirPlay is Apple's protocol and trademark;
 > ScreenMagnet is an independent, reverse-engineered client, same territory as projects like
@@ -38,35 +41,21 @@ Click it and every AirPlay screen on your network is one more click away:
 
 ## Install
 
-**Windows:** grab `ScreenMagnet-Setup.exe` from the [latest release](../../releases/latest)
-and run it. It bundles everything — the app, the AirPlay sender, GStreamer, and the VC++
-runtime — nothing else to install first. You'll get one standard "allow this app to make
-changes" prompt; after that it's fully unattended.
+See the [installation guide](docs/INSTALL.md) for Windows setup, Linux AppImage
+installation, capture dependencies, updates, and removal.
 
-**Linux:** the AppImage is built with its own Python runtime, PySide6, zeroconf,
-and the patched `doubletake` sender. It does not import from the host Python.
-No Linux release has been cut yet. To prepare, run, diagnose, build, or test it
-through the single launcher:
+- **Windows x64:** `ScreenMagnet-Setup.exe` includes the application and matching
+  AirPlay sender. Setup downloads official GStreamer and Visual C++ prerequisites
+  when needed; internet and a normal Windows administrator prompt are required.
+- **Linux x86_64:** download the AppImage, checksum, `install-appimage.sh`, and
+  `screenmagnet.svg` into one folder. Run `bash install-appimage.sh` to add the
+  app to your user application menu. The launcher works without FUSE.
+- **SteamOS/Bazzite:** use Desktop Mode and the documented distrobox capture setup.
+  The installer does not unlock or modify an immutable host OS.
 
-```bash
-bash ./screenmagnet-linux.sh doctor
-bash ./screenmagnet-linux.sh run
-```
-
-On SteamOS — or any host with no H.264 GStreamer encoder — add the container
-fallback first. It creates the box, installs GStreamer into it, and does not
-return until it has proved the container can actually encode:
-
-```bash
-bash ./screenmagnet-linux.sh setup-steamos    # a few minutes, once
-```
-
-Ubuntu 22.04 and 24.04 are the release gates. SteamOS is tested after Ubuntu;
-other glibc-based x86_64 distributions are best-effort. See
-[`docs/LINUX-RELEASE-READINESS.md`](docs/LINUX-RELEASE-READINESS.md) for the
-dependency model and exact verification matrix. If
-you're on SteamOS or another host with no H.264 GStreamer encoder available, see
-[Why a container](#why-a-container).
+Preview packages are staged as draft releases during readiness review. There is
+no public stable release yet. Python/Qt and source/license materials are included;
+Linux GStreamer/capture integration remains an external dependency.
 
 ## Running from source
 
@@ -97,7 +86,7 @@ bash ./screenmagnet-linux.sh setup-source
 
 ```powershell
 py -3.13 -m venv $env:LOCALAPPDATA\screenmagnet\venv
-& $env:LOCALAPPDATA\screenmagnet\venv\Scripts\pip install PySide6 zeroconf
+& $env:LOCALAPPDATA\screenmagnet\venv\Scripts\pip install PySide6-Essentials==6.11.1 zeroconf==0.150.0
 ```
 
 Then point it at a built `doubletake` (the AirPlay sender — see [The engine](#the-engine)):
@@ -160,12 +149,17 @@ Windows too. It is not vendored here; `patches/` holds our changes against upstr
 
 ## Known limitations
 
-- **No audio on Windows yet.** `doubletake`'s audio capture only has a Linux backend
-  (PulseAudio/PipeWire monitor sources) — casting on Windows currently sends video only.
-  A Windows WASAPI loopback backend is a planned follow-up.
-- **No Linux release published yet.** The AppImage bundles `doubletake` and the frozen
-  Qt app. Packaging CI builds it on Ubuntu 22.04 and validates that same artifact on
-  Ubuntu 24.04, but a tag must wait for the manual cast gates in the Linux release guide.
+- The rebuilt Windows sender includes reconstructed video and WASAPI audio paths.
+  Automated startup and synthetic encoding checks do not establish live TV/audio
+  compatibility. Treat Windows casting as a preview until tested with your receiver.
+- Linux AppImage startup is verified on Ubuntu 22.04 and 24.04. Actual casting needs
+  GStreamer, a working screen-capture session, and a reachable AirPlay receiver.
+- SteamOS/Bazzite Desktop Mode, Fedora and Arch are additional device-test targets;
+  Gaming Mode, ARM and Alpine/musl are not supported by this x86_64 package.
+- Extended display on Windows requires a separately installed virtual-display driver.
+  Mirror mode does not require that driver.
+- Preview installers are unsigned. Packaged updates are downloaded from Releases;
+  the development checkout's Git updater is not used to replace a frozen app.
 
 ## Latency
 
@@ -194,6 +188,10 @@ And *lowering* `-target-latency-ms` is a no-op — the code only ever raises tha
   select by the dropdown in the panel, not by editing config by hand.
 - Wi-Fi Direct / Miracast is impossible on the reference SteamOS kernel: the mt76 driver only
   gained `P2P_DEVICE` in Linux 6.14. AirPlay needs none of it.
+
+## Support development
+
+ScreenMagnet is free and open source. [Support development with PayPal](https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=demurphy242%40gmail.com&item_name=Support+ScreenMagnet+development&currency_code=USD)—choose any amount. Contributions are optional.
 
 ## License
 

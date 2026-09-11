@@ -1,70 +1,92 @@
-; ScreenMagnet Windows installer.
-;
-; Bundles the PyInstaller-frozen app, the doubletake AirPlay sender, and
-; chains the GStreamer runtime + VC++ redistributable as silent prerequisites
-; so the end user needs nothing pre-installed. Build with:
-;   ISCC packaging\windows\installer.iss
-; (run PyInstaller first -- this expects dist\ScreenMagnet\ to already exist.)
-
+; Online Windows preview installer. Run build.ps1 with a verified prerequisite
+; manifest; third-party prerequisite executables are never embedded.
+#ifndef AppVersion
+  #error AppVersion is required. Use packaging/windows/build.ps1.
+#endif
+#ifndef AppNumericVersion
+  #error AppNumericVersion is required. Use packaging/windows/build.ps1.
+#endif
 #define AppName "ScreenMagnet"
-#define AppVersion "0.1.0"
-#define AppPublisher "DMoneyManZ"
-#define AppURL "https://github.com/DMoneyManZ/ScreenMagnet"
 
 [Setup]
 AppId={{B37F0D9C-6C2B-4E36-9C6A-2F6E3B1E7F41}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppPublisher={#AppPublisher}
-AppPublisherURL={#AppURL}
+AppVerName={#AppName} {#AppVersion} Windows Preview
+VersionInfoVersion={#AppNumericVersion}
+AppPublisher=DMoneyManZ
+AppPublisherURL=https://github.com/DMoneyManZ/ScreenMagnet
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 OutputDir=output
 OutputBaseFilename=ScreenMagnet-Setup
 SetupIconFile=..\..\app\assets\screenmagnet.ico
+LicenseFile=dist\ScreenMagnet\LICENSE
+InfoBeforeFile=dist\ScreenMagnet\WINDOWS-PREVIEW.txt
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-; Installing GStreamer/VC++ system-wide needs a genuine elevated token, so this
-; requests it normally (the standard, expected UAC prompt most Windows
-; installers show) rather than trying to dodge elevation.
+MinVersion=10.0
 PrivilegesRequired=admin
 UninstallDisplayIcon={app}\ScreenMagnet.exe
+CloseApplications=yes
+WizardStyle=modern
 
 [Files]
-Source: "dist\ScreenMagnet\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
-Source: "vendor\doubletake.exe"; DestDir: "{app}\doubletake\bin"; Flags: ignoreversion
-Source: "prereqs\gstreamer-1.0-msvc-x86_64-1.28.5.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
-Source: "prereqs\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
+Source: "dist\ScreenMagnet\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "install-prerequisites.ps1"; Flags: dontcopy
+Source: "dist\ScreenMagnet\windows-prerequisites.json"; Flags: dontcopy
 
 [Run]
-Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing the Visual C++ Runtime..."; Check: VCRedistNeedsInstall
-Filename: "{tmp}\gstreamer-1.0-msvc-x86_64-1.28.5.exe"; Parameters: "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"; StatusMsg: "Installing GStreamer (this can take a few minutes)..."; Check: GStreamerNeedsInstall
-Filename: "{app}\ScreenMagnet.exe"; Description: "Launch ScreenMagnet"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\ScreenMagnet.exe"; Description: "Launch ScreenMagnet Windows Preview"; Flags: nowait postinstall skipifsilent
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\ScreenMagnet.exe"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\ScreenMagnet.exe"; Tasks: desktopicon
+Name: "{group}\{#AppName}"; Filename: "{app}\ScreenMagnet.exe"; AppUserModelID: "io.screenmagnet.ScreenMagnet"
+Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\ScreenMagnet.exe"; Tasks: desktopicon; AppUserModelID: "io.screenmagnet.ScreenMagnet"
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
-
-[Registry]
-Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "SCREENMAGNET_DOUBLETAKE"; ValueData: "{app}\doubletake"; Flags: preservestringtype
+Name: desktopicon; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [Code]
-function GStreamerNeedsInstall(): Boolean;
+var
+  PrerequisitesReady: Boolean;
+  PrerequisitesNeedRestart: Boolean;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ExitCode: Integer;
+  Arguments: String;
 begin
-  Result := not FileExists(ExpandConstant('{pf}\gstreamer\1.0\msvc_x86_64\bin\gst-inspect-1.0.exe'));
+  Result := '';
+  if PrerequisitesReady then exit;
+  try
+    ExtractTemporaryFile('install-prerequisites.ps1');
+    ExtractTemporaryFile('windows-prerequisites.json');
+    WizardForm.StatusLabel.Caption := 'Checking prerequisites; downloading missing official runtimes...';
+    Arguments := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+      ExpandConstant('{tmp}\install-prerequisites.ps1') + '" -ManifestPath "' +
+      ExpandConstant('{tmp}\windows-prerequisites.json') + '" -DownloadDirectory "' +
+      ExpandConstant('{tmp}\screenmagnet-prerequisites') + '" -Install -LogPath "' +
+      ExpandConstant('{tmp}\screenmagnet-prerequisites.log') + '"';
+    if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+      Arguments, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+      Result := 'Could not start prerequisite verification. Windows PowerShell is required.'
+    else if (ExitCode <> 0) and (ExitCode <> 3010) then
+      Result := 'Prerequisite verification or installation failed. Check your internet connection and the log: ' +
+        ExpandConstant('{tmp}\screenmagnet-prerequisites.log')
+    else begin
+      PrerequisitesReady := True;
+      PrerequisitesNeedRestart := ExitCode = 3010;
+    end;
+  except
+    Result := GetExceptionMessage;
+  end;
 end;
 
-function VCRedistNeedsInstall(): Boolean;
-var
-  Installed: Cardinal;
+function NeedRestart: Boolean;
 begin
-  Result := True;
-  if RegQueryDWordValue(HKLM, 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\X64', 'Installed', Installed) then
-    Result := (Installed <> 1);
+  Result := PrerequisitesNeedRestart;
 end;

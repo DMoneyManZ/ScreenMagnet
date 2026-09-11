@@ -47,3 +47,7 @@ packaging/linux/*.spec
 
 # editable-install metadata
 *.egg-info/
+
+# Release review build inputs and artifacts
+/build/
+/release-artifacts/
